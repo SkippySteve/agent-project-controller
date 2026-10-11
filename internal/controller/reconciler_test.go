@@ -565,14 +565,14 @@ func TestModelRefreshTokenSuspendsWorkspace(t *testing.T) {
 	if e := r.ensure(ctx, w); e != nil {
 		t.Fatal(e)
 	}
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "model-access", Namespace: namespace(w)}, Data: map[string][]byte{"refresh-token": []byte("do-not-copy")}}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "model-access", Namespace: namespace(w), Labels: labels(w)}, Data: map[string][]byte{"refresh-token": []byte("do-not-copy")}}
 	if e := r.Create(ctx, secret); e != nil {
 		t.Fatal(e)
 	}
 	if e := r.ensure(ctx, w); e == nil || !strings.Contains(e.Error(), "refresh token") {
 		t.Fatal(e)
 	}
-	secret.Data = map[string][]byte{"access-token": []byte("access-only")}
+	secret.Data = validModelAccess()
 	if e := r.Update(ctx, secret); e != nil {
 		t.Fatal(e)
 	}
@@ -613,5 +613,67 @@ func TestProxyImageRestoredToPin(t *testing.T) {
 	}
 	if e := r.ensure(ctx, w); e == nil || !strings.Contains(e.Error(), "proxy deployment drift") {
 		t.Fatal(e)
+	}
+}
+
+func TestModelGrantExpiryAndRevocationStopAndRecover(t *testing.T) {
+	ctx := context.Background()
+	r, w, _ := fixture(t)
+	if err := r.ensure(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	grant := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "model-access", Namespace: namespace(w), Labels: labels(w)}, Data: validModelAccess()}
+	if err := r.Create(ctx, grant); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ensure(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	// The required-grant marker survives a controller restart and Secret deletion.
+	restarted := *r
+	if err := r.Delete(ctx, grant); err != nil {
+		t.Fatal(err)
+	}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: w.Namespace, Name: w.Name}}
+	if _, err := restarted.Reconcile(ctx, request); err == nil {
+		t.Fatal("revoked grant did not block running workspace")
+	}
+	sandbox := &unstructured.Unstructured{}
+	sandbox.SetGroupVersionKind(sandboxGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "project"}, sandbox); err != nil {
+		t.Fatal(err)
+	}
+	replicas, _, _ := unstructured.NestedInt64(sandbox.Object, "spec", "replicas")
+	if replicas != 0 {
+		t.Fatal("revocation left the worker running")
+	}
+	grant.ResourceVersion = ""
+	grant.Data = validModelAccess()
+	if err := r.Create(ctx, grant); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ensure(ctx, w); err != nil {
+		t.Fatal("valid renewal did not recover", err)
+	}
+	grant.Data["expires-at"] = []byte("1")
+	if err := r.Update(ctx, grant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Reconcile(ctx, request); err == nil {
+		t.Fatal("expired grant did not stop workspace")
+	}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "project"}, sandbox); err != nil {
+		t.Fatal(err)
+	}
+	replicas, _, _ = unstructured.NestedInt64(sandbox.Object, "spec", "replicas")
+	if replicas != 0 {
+		t.Fatal("expired grant left worker running")
+	}
+	grant.Data = validModelAccess()
+	if err := r.Update(ctx, grant); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ensure(ctx, w); err != nil {
+		t.Fatal("expiry renewal did not recover", err)
 	}
 }
