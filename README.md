@@ -1,8 +1,8 @@
 # Agent project controller
 
-A planned Go controller that gives selected Git repositories isolated project environments on Kubernetes Agent Sandbox.
+A Go controller that gives selected Forgejo repositories isolated project environments on Kubernetes Agent Sandbox. Open a project from the dashboard, work on a dedicated branch, then pause it or revoke access and remove its environment.
 
-This repository contains the initial project scope. There is no implemented controller or deployable release yet.
+This is an initial implementation for qualification and review. It has not been deployed or qualified against a live Cilium and Agent Sandbox dataplane. See [installation](docs/installation.md), [security boundaries](docs/security.md), [API](docs/api.md) and [qualification](docs/qualification.md).
 
 ## Relationship to Agent Sandbox
 
@@ -25,7 +25,7 @@ Pause preserves project data. Removal has an explicit retention policy. A failed
 ## Backend design
 
 - Implement the control backend in Go using Kubernetes controller conventions.
-- Explore a ProjectWorkspace custom resource for repository, environment template, access policy and desired lifecycle. This is a proposed API, not an existing upstream resource.
+- The ProjectWorkspace custom resource records repository, immutable HTTPS policy and desired lifecycle. This is this project's API, not an upstream Agent Sandbox resource.
 - Start with core Sandbox resources. Add optional upstream templates, claims or warm pools only when needed.
 - Build a documented HTTP API with a small dashboard as one client.
 - Integrate Forgejo first through a Git-host interface that can support other hosts later.
@@ -43,7 +43,7 @@ Pause preserves project data. Removal has an explicit retention policy. A failed
 
 ## Outbound HTTPS policy
 
-Include project-scoped outbound policy with separate interfaces for network enforcement and HTTPS inspection. Cilium is the first proposed network provider for the existing deployment, not a requirement of the core controller.
+Project-scoped outbound policy uses separate interfaces for network enforcement and HTTPS inspection. Cilium is the implemented network provider and is required by the initial deployment profile. Other providers need an implementation and qualification.
 
 A network provider must prevent direct outbound connections that bypass the inspecting proxy. The inspecting proxy can enforce permitted HTTPS hosts, methods and paths when clients trust its inspection certificate authority. Request-body controls are a separate capability and must not be assumed from path filtering.
 
@@ -71,7 +71,7 @@ Do not capture tokens, authorization headers, source code, prompts, responses or
 
 ## Initial adoption requirements
 
-The first supported secure deployment profile is planned to require:
+The initial deployment profile requires:
 
 - A Kubernetes cluster with a qualified upstream Agent Sandbox controller and core Sandbox CRD. Optional template, claim and warm-pool extensions are unnecessary initially.
 - Cilium as the initially qualified network enforcement provider, plus a separately deployed inspecting proxy when HTTPS method or path filtering is requested. Cilium alone does not establish the complete inspection workflow.
@@ -88,14 +88,18 @@ Keep cluster addresses, storage classes, authentication settings and provider co
 
 Forgejo is the source repository. GitHub and GitLab can be added as push mirrors after destination repositories and credentials are configured. Git mirroring transfers repository history; issues, pull requests and host settings need separate migration or integration.
 
-Before a public release, select a license, publish installation and upgrade documentation, and qualify authorization, revocation, restart recovery and storage cleanup end to end.
+Code is licensed under Apache-2.0. Before a public release, qualify the actual cluster's runtime isolation, Cilium bypass prevention, volume deletion, client trust and identity-provider integration end to end. Passing local qualification does not establish those properties in another deployment.
 
-## Initial milestones
+## OIDC login
 
-1. Specify ProjectWorkspace state transitions, credential scope and resource ownership.
-2. Build the Forgejo adapter and verify branch protection and independent revocation.
-3. Implement Sandbox provisioning, cloning and project readiness.
-4. Implement removal, retry recovery and cleanup verification.
-5. Add the API and dashboard, followed by optional agent adapters.
+OIDC discovery and authorization-code login with PKCE are implemented. Configure an issuer, confidential client and an explicit operator group or subject allowlist. Identity tokens are verified for signature, issuer, audience, expiry and nonce. The included deployment uses OIDC and disables static browser login.
 
-The existing private sandbox-control implementation can inform the design. Any extracted code must be reviewed for deployment-specific values, secrets and licensing before inclusion.
+Sessions use secure, HTTP-only cookies and expire after at most 15 minutes. A controller restart invalidates sessions. The first release uses one replica because session and login-transaction state are local to that process. Sign-out invalidates the application session; it does not log the user out of the identity provider.
+
+Authentik and Keycloak can supply the standard protocol and mapped group claims, but their deployment-specific configurations still require qualification. The backend does not trust unsigned identity headers from a reverse proxy.
+
+## Development
+
+Use Go 1.27.2 or later, Git and kubectl for manifest rendering. Run `make test vet build render`. Optional local Kubernetes API and disposable Forgejo qualification are described in [qualification](docs/qualification.md).
+
+The container image includes the Go controller, inspecting proxy, clone bootstrap and Git credential helper. No frontend build server or Node runtime is required. Optional OpenRig would run separately within a project environment.
