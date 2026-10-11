@@ -41,8 +41,6 @@ Pause preserves project data. Removal has an explicit retention policy. A failed
 - Track the environment's storage and credentials so deletion can be verified. Backups and external resources need their own retention policies.
 - Treat repository and agent execution as untrusted. Project workloads must not administer the controller or cluster.
 
-## Optional agent integrations
-
 ## Outbound HTTPS policy
 
 Include project-scoped outbound policy with separate interfaces for network enforcement and HTTPS inspection. Cilium is the first proposed network provider for the existing deployment, not a requirement of the core controller.
