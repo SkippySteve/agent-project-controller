@@ -67,7 +67,12 @@ func run(ctx context.Context) error {
 			if len(os.Args) != 3 {
 				return errors.New("usage: agent-project-controller connect <workspace>")
 			}
-			return connectCLI(ctx, os.Args[2])
+			return connectCLI(ctx, os.Args[2], []string{"/bin/sh"})
+		case "exec":
+			if len(os.Args) < 5 || os.Args[3] != "--" {
+				return errors.New("usage: agent-project-controller exec <workspace> -- <command>")
+			}
+			return connectCLI(ctx, os.Args[2], os.Args[4:])
 		case "controller":
 		default:
 			return errors.New("unknown command")
@@ -178,7 +183,7 @@ func run(ctx context.Context) error {
 	_ = httpServer.Shutdown(c)
 	return e
 }
-func connectCLI(ctx context.Context, workspace string) error {
+func connectCLI(ctx context.Context, workspace string, command []string) error {
 	config := ctrl.GetConfigOrDie()
 	scheme := runtime.NewScheme()
 	if e := clientgoscheme.AddToScheme(scheme); e != nil {
@@ -191,7 +196,21 @@ func connectCLI(ctx context.Context, workspace string) error {
 	if e != nil {
 		return e
 	}
-	return connect.Run(ctx, c, config, env("CONTROL_NAMESPACE", "agent-project-controller"), workspace)
+	_, pod, e := connect.Pod(ctx, c, env("CONTROL_NAMESPACE", "agent-project-controller"), workspace)
+	if e != nil {
+		return e
+	}
+	if len(command) == 1 && command[0] == "/bin/sh" {
+		return connect.Run(ctx, c, config, env("CONTROL_NAMESPACE", "agent-project-controller"), workspace)
+	}
+	info, statErr := os.Stdin.Stat()
+	tty := statErr == nil && info.Mode()&os.ModeCharDevice != 0
+	line, e := connect.ExecCommand(pod.Namespace, pod.Name, command)
+	if e != nil {
+		return e
+	}
+	fmt.Fprintf(os.Stderr, "%s\n", line)
+	return connect.Exec(ctx, config, pod.Namespace, pod.Name, command, os.Stdin, os.Stdout, os.Stderr, tty)
 }
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))

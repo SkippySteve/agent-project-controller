@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -349,6 +351,10 @@ func (r *Reconciler) ensure(ctx context.Context, w *api.ProjectWorkspace) error 
 	if e != nil {
 		return e
 	}
+	beforeCA := append([]byte(nil), s.Data["ca.crt"]...)
+	if e = r.rotateCA(ctx, w, s); e != nil {
+		return e
+	}
 	token, e := r.Host.Grant(ctx, w.Spec.Repository, credentials(s))
 	if e != nil {
 		return e
@@ -384,8 +390,91 @@ func (r *Reconciler) ensure(ctx context.Context, w *api.ProjectWorkspace) error 
 	if !ns.DeletionTimestamp.IsZero() {
 		return errors.New("project namespace is terminating")
 	}
+	if e = r.modelAccess(ctx, w); e != nil {
+		return e
+	}
 	if e = r.objects(ctx, w, s); e != nil {
 		return e
+	}
+	if !bytes.Equal(beforeCA, s.Data["ca.crt"]) {
+		return r.restartInspection(ctx, w)
+	}
+	return nil
+}
+func generationOf(raw []byte) (int, error) {
+	if len(raw) == 0 {
+		return 1, nil
+	}
+	n, e := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if e != nil || n < 1 || n > 1000 {
+		return 0, errors.New("inspection CA generation is invalid")
+	}
+	return n, nil
+}
+
+// rotateCA advances the inspection CA only when the operator annotation increases by one.
+// The private key stays in the control ledger and the proxy. Workers receive the public certificate.
+func (r *Reconciler) rotateCA(ctx context.Context, w *api.ProjectWorkspace, s *corev1.Secret) error {
+	have, e := generationOf(s.Data["ca-generation"])
+	if e != nil {
+		return e
+	}
+	want := have
+	if raw := strings.TrimSpace(w.Annotations["projects.agentwork.dev/ca-generation"]); raw != "" {
+		want, e = generationOf([]byte(raw))
+		if e != nil {
+			return e
+		}
+	}
+	if want < have {
+		return errors.New("inspection CA generation cannot go backwards")
+	}
+	if want > have+1 {
+		return errors.New("inspection CA generation must increase by one")
+	}
+	if want == have && string(s.Data["ca-generation"]) == strconv.Itoa(have) {
+		return nil
+	}
+	old := s.DeepCopy()
+	if want > have {
+		cert, key, e := proxy.GenerateCA()
+		if e != nil {
+			return e
+		}
+		s.Data["ca.crt"] = cert
+		s.Data["ca.key"] = key
+	}
+	s.Data["ca-generation"] = []byte(strconv.Itoa(want))
+	if e = r.Patch(ctx, s, client.MergeFrom(old)); e != nil {
+		return e
+	}
+	if want > have {
+		return r.audit(ctx, w, "ca-"+strconv.Itoa(want))
+	}
+	return nil
+}
+func (r *Reconciler) modelAccess(ctx context.Context, w *api.ProjectWorkspace) error {
+	s := &corev1.Secret{}
+	e := r.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "model-access"}, s)
+	if apierrors.IsNotFound(e) {
+		return nil
+	}
+	if e != nil {
+		return e
+	}
+	return RejectRefreshMaterial(s.Data)
+}
+func (r *Reconciler) restartInspection(ctx context.Context, w *api.ProjectWorkspace) error {
+	for _, role := range []string{"worker", "proxy"} {
+		var pods corev1.PodList
+		if e := r.List(ctx, &pods, client.InNamespace(namespace(w)), client.MatchingLabels{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": role}); e != nil {
+			return e
+		}
+		for i := range pods.Items {
+			if e := r.Delete(ctx, &pods.Items[i]); e != nil && !apierrors.IsNotFound(e) {
+				return e
+			}
+		}
 	}
 	return nil
 }
@@ -475,7 +564,20 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 			return r.Patch(ctx, current, client.MergeFrom(old))
 		}
 	case *corev1.ConfigMap:
-		if !reflect.DeepEqual(existing.(*corev1.ConfigMap).Data, expected.Data) {
+		current := existing.(*corev1.ConfigMap)
+		if current.Name == "trust" {
+			want := expected.Data["ca.crt"]
+			if want == "" || len(expected.Data) != 1 || len(current.Data) != 1 || current.Data["ca.crt"] == "" {
+				return errors.New("project configuration drift detected")
+			}
+			if current.Data["ca.crt"] != want {
+				old := current.DeepCopy()
+				current.Data = map[string]string{"ca.crt": want}
+				return r.Patch(ctx, current, client.MergeFrom(old))
+			}
+			return nil
+		}
+		if !reflect.DeepEqual(current.Data, expected.Data) {
 			return errors.New("project configuration drift detected")
 		}
 	case *appsv1.Deployment:
@@ -485,18 +587,30 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 		}
 		gotSpec := current.Spec.DeepCopy()
 		wantSpec := expected.Spec.DeepCopy()
-		if gotSpec.Template.Spec.DNSConfig != nil {
-			gotSpec.Template.Spec.DNSConfig.Nameservers = []string{"normalized"}
-		}
-		if wantSpec.Template.Spec.DNSConfig != nil {
-			wantSpec.Template.Spec.DNSConfig.Nameservers = []string{"normalized"}
-		}
+		normalizeProxyDrift(gotSpec)
+		normalizeProxyDrift(wantSpec)
 		if !contains(*gotSpec, *wantSpec) || current.Spec.Template.Spec.DNSConfig == nil || expected.Spec.Template.Spec.DNSConfig == nil {
 			return errors.New("proxy deployment drift detected")
 		}
-		if !reflect.DeepEqual(current.Spec.Template.Spec.DNSConfig.Nameservers, expected.Spec.Template.Spec.DNSConfig.Nameservers) {
+		wantImage, ok := proxyContainerImage(expected.Spec)
+		gotImage, gotOK := proxyContainerImage(current.Spec)
+		if !ok || !gotOK {
+			return errors.New("proxy deployment drift detected")
+		}
+		dnsChanged := !reflect.DeepEqual(current.Spec.Template.Spec.DNSConfig.Nameservers, expected.Spec.Template.Spec.DNSConfig.Nameservers)
+		imageChanged := gotImage != wantImage
+		if dnsChanged || imageChanged {
 			old := current.DeepCopy()
-			current.Spec.Template.Spec.DNSConfig.Nameservers = append([]string{}, expected.Spec.Template.Spec.DNSConfig.Nameservers...)
+			if dnsChanged {
+				current.Spec.Template.Spec.DNSConfig.Nameservers = append([]string{}, expected.Spec.Template.Spec.DNSConfig.Nameservers...)
+			}
+			if imageChanged {
+				for i := range current.Spec.Template.Spec.Containers {
+					if current.Spec.Template.Spec.Containers[i].Name == "proxy" {
+						current.Spec.Template.Spec.Containers[i].Image = wantImage
+					}
+				}
+			}
 			if e = r.Patch(ctx, current, client.MergeFrom(old)); e != nil {
 				return e
 			}
@@ -541,6 +655,24 @@ func cloneValue(v any) any {
 }
 func normalizeSandboxNameservers(spec map[string]any) {
 	_ = unstructured.SetNestedStringSlice(spec, []string{"normalized"}, "podTemplate", "spec", "dnsConfig", "nameservers")
+}
+func normalizeProxyDrift(spec *appsv1.DeploymentSpec) {
+	if spec.Template.Spec.DNSConfig != nil {
+		spec.Template.Spec.DNSConfig.Nameservers = []string{"normalized"}
+	}
+	for i := range spec.Template.Spec.Containers {
+		if spec.Template.Spec.Containers[i].Name == "proxy" {
+			spec.Template.Spec.Containers[i].Image = "normalized"
+		}
+	}
+}
+func proxyContainerImage(spec appsv1.DeploymentSpec) (string, bool) {
+	for _, c := range spec.Template.Spec.Containers {
+		if c.Name == "proxy" && c.Image != "" {
+			return c.Image, true
+		}
+	}
+	return "", false
 }
 func (r *Reconciler) restartStaleDNSWorkers(ctx context.Context, w *api.ProjectWorkspace, want []string) (bool, error) {
 	var pods corev1.PodList

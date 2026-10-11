@@ -28,6 +28,7 @@ import (
 	"time"
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
+	"golang.org/x/net/http2"
 )
 
 type Config struct {
@@ -324,8 +325,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if e = rw.Flush(); e != nil {
 		return
 	}
-	conn := tls.Server(bufferedConn{raw, rw.Reader}, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}, NextProtos: []string{"http/1.1"}})
+	conn := tls.Server(bufferedConn{raw, rw.Reader}, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2", "http/1.1"}})
 	if e = conn.HandshakeContext(r.Context()); e != nil {
+		return
+	}
+	if conn.ConnectionState().NegotiatedProtocol == "h2" {
+		s.serveHTTP2(r.Context(), conn, host)
 		return
 	}
 	reader := bufio.NewReaderSize(conn, 32<<10)
@@ -335,9 +340,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(conn, 431, "invalid or oversized request headers")
 			return
 		}
-		reqHost := strings.TrimSuffix(req.Host, ":443")
-		// Reject alternate authorities, escaped paths and protocol upgrades. They cannot be inspected safely by this HTTP/1 implementation.
-		denied := reqHost != host || req.URL.IsAbs() || req.Method == "CONNECT" || req.Header.Get("Upgrade") != "" || strings.Contains(req.URL.EscapedPath(), "%") || !Allowed(s.Config, host, req.Method, req.URL.Path)
+		// Reject alternate authorities, escaped paths and protocol upgrades. HTTP/2 is inspected on its own path.
+		denied := requestDenied(s.Config, host, req)
 		if denied {
 			req.Body.Close()
 			writeError(conn, 403, "request denied")
@@ -374,6 +378,52 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return // One request per tunnel bounds connection lifetime and revocation delay.
 	}
+}
+func requestDenied(cfg Config, host string, req *http.Request) bool {
+	reqHost := strings.TrimSuffix(req.Host, ":443")
+	return reqHost != host || req.URL.IsAbs() || req.Method == "CONNECT" || req.Header.Get("Upgrade") != "" || strings.Contains(req.URL.EscapedPath(), "%") || !Allowed(cfg, host, req.Method, req.URL.Path)
+}
+
+// serveHTTP2 inspects each HTTP/2 stream. It is not an opaque tunnel.
+func (s *Server) serveHTTP2(ctx context.Context, conn net.Conn, host string) {
+	(&http2.Server{}).ServeConn(conn, &http2.ServeConnOpts{
+		Context:    ctx,
+		BaseConfig: &http.Server{MaxHeaderBytes: 32 << 10, ReadHeaderTimeout: 10 * time.Second},
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if requestDenied(s.Config, host, req) {
+				http.Error(w, "request denied", http.StatusForbidden)
+				return
+			}
+			if req.ContentLength > 128<<20 {
+				http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			req.Body = http.MaxBytesReader(w, req.Body, 128<<20)
+			forward := req.Clone(req.Context())
+			forward.RequestURI = ""
+			forward.URL.Scheme = "https"
+			forward.URL.Host = host
+			forward.Host = host
+			dropHopHeaders(forward.Header)
+			callCtx, cancel := context.WithTimeout(req.Context(), 2*time.Minute)
+			defer cancel()
+			res, e := s.Transport.RoundTrip(forward.WithContext(callCtx))
+			if e != nil {
+				slog.Warn("proxy upstream request failed", "failure_kind", failureKind(e))
+				http.Error(w, "upstream unavailable", http.StatusBadGateway)
+				return
+			}
+			defer res.Body.Close()
+			dropHopHeaders(res.Header)
+			for key, values := range res.Header {
+				for _, value := range values {
+					w.Header().Add(key, value)
+				}
+			}
+			w.WriteHeader(res.StatusCode)
+			_, _ = io.Copy(w, io.LimitReader(res.Body, 128<<20))
+		}),
+	})
 }
 func writeError(w io.Writer, status int, message string) {
 	res := http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(message)), ContentLength: int64(len(message)), Close: true}

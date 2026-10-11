@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -490,5 +491,127 @@ func TestSandboxImageDriftRejected(t *testing.T) {
 	}
 	if e = r.ensure(ctx, w); e == nil {
 		t.Fatal("sandbox image drift accepted")
+	}
+}
+
+func TestCARotationUpdatesTrustAndRestartsPods(t *testing.T) {
+	ctx := context.Background()
+	r, w, _ := fixture(t)
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	var secret corev1.Secret
+	if e := r.Get(ctx, types.NamespacedName{Namespace: "control", Name: identity(w)}, &secret); e != nil {
+		t.Fatal(e)
+	}
+	if string(secret.Data["ca-generation"]) != "1" {
+		t.Fatalf("generation %s", secret.Data["ca-generation"])
+	}
+	first := append([]byte(nil), secret.Data["ca.crt"]...)
+	ns := namespace(w)
+	worker := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "project", Namespace: ns, Labels: map[string]string{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": "worker"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "workspace", Image: "example"}}}}
+	proxyPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "proxy", Namespace: ns, Labels: map[string]string{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": "proxy"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "proxy", Image: "example"}}}}
+	if e := r.Create(ctx, worker); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Create(ctx, proxyPod); e != nil {
+		t.Fatal(e)
+	}
+	if w.Annotations == nil {
+		w.Annotations = map[string]string{}
+	}
+	w.Annotations["projects.agentwork.dev/ca-generation"] = "2"
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: "control", Name: identity(w)}, &secret); e != nil {
+		t.Fatal(e)
+	}
+	if string(secret.Data["ca-generation"]) != "2" || bytes.Equal(first, secret.Data["ca.crt"]) || len(secret.Data["ca.key"]) == 0 {
+		t.Fatal("CA was not rotated")
+	}
+	var trust corev1.ConfigMap
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "trust"}, &trust); e != nil {
+		t.Fatal(e)
+	}
+	if trust.Data["ca.crt"] != string(secret.Data["ca.crt"]) {
+		t.Fatal("worker trust was not updated")
+	}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "project"}, &corev1.Pod{}); !apierrors.IsNotFound(e) {
+		t.Fatal("worker was not restarted", e)
+	}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "proxy"}, &corev1.Pod{}); !apierrors.IsNotFound(e) {
+		t.Fatal("proxy was not restarted", e)
+	}
+	rotated := append([]byte(nil), secret.Data["ca.crt"]...)
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: "control", Name: identity(w)}, &secret); e != nil {
+		t.Fatal(e)
+	}
+	if !bytes.Equal(rotated, secret.Data["ca.crt"]) {
+		t.Fatal("CA rotated again without a new generation")
+	}
+	w.Annotations["projects.agentwork.dev/ca-generation"] = "4"
+	if e := r.ensure(ctx, w); e == nil || !strings.Contains(e.Error(), "increase by one") {
+		t.Fatal(e)
+	}
+}
+
+func TestModelRefreshTokenSuspendsWorkspace(t *testing.T) {
+	ctx := context.Background()
+	r, w, _ := fixture(t)
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "model-access", Namespace: namespace(w)}, Data: map[string][]byte{"refresh-token": []byte("do-not-copy")}}
+	if e := r.Create(ctx, secret); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.ensure(ctx, w); e == nil || !strings.Contains(e.Error(), "refresh token") {
+		t.Fatal(e)
+	}
+	secret.Data = map[string][]byte{"access-token": []byte("access-only")}
+	if e := r.Update(ctx, secret); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestProxyImageRestoredToPin(t *testing.T) {
+	ctx := context.Background()
+	r, w, _ := fixture(t)
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	pinned := "example.com/proxy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	r.Config.ProxyImage = pinned
+	var deploy appsv1.Deployment
+	key := types.NamespacedName{Namespace: namespace(w), Name: "proxy"}
+	if e := r.Get(ctx, key, &deploy); e != nil {
+		t.Fatal(e)
+	}
+	deploy.Spec.Template.Spec.Containers[0].Image = "evil.example/worker:latest"
+	if e := r.Update(ctx, &deploy); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Get(ctx, key, &deploy); e != nil {
+		t.Fatal(e)
+	}
+	if deploy.Spec.Template.Spec.Containers[0].Image != pinned {
+		t.Fatalf("proxy image = %s", deploy.Spec.Template.Spec.Containers[0].Image)
+	}
+	deploy.Spec.Template.Spec.Containers[0].Args = []string{"shell"}
+	if e := r.Update(ctx, &deploy); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.ensure(ctx, w); e == nil || !strings.Contains(e.Error(), "proxy deployment drift") {
+		t.Fatal(e)
 	}
 }

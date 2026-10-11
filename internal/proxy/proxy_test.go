@@ -68,6 +68,51 @@ func TestInspectedTLSRequests(t *testing.T) {
 		t.Fatal("unexpected unlisted destination access")
 	}
 }
+func TestInspectedHTTP2(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("allowed"))
+	}))
+	defer upstream.Close()
+	cert, key, e := GenerateCA()
+	if e != nil {
+		t.Fatal(e)
+	}
+	config := Config{Rules: []api.HTTPSRule{{Host: "git.example.com", Methods: []string{"GET"}, Paths: []string{"/repo.git"}}}}
+	p, e := New(config, cert, key)
+	if e != nil {
+		t.Fatal(e)
+	}
+	upstreamURL, _ := url.Parse(upstream.URL)
+	roots := x509.NewCertPool()
+	roots.AddCert(upstream.Certificate())
+	p.Transport.TLSClientConfig = &tls.Config{RootCAs: roots, ServerName: "example.com"}
+	p.Transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, upstreamURL.Host)
+	}
+	server := httptest.NewServer(p)
+	defer server.Close()
+	serverURL, _ := url.Parse(server.URL)
+	ca := x509.NewCertPool()
+	ca.AppendCertsFromPEM(cert)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(serverURL), ForceAttemptHTTP2: true, TLSClientConfig: &tls.Config{RootCAs: ca, NextProtos: []string{"h2"}}}}
+	res, e := client.Get("https://git.example.com/repo.git/info/refs")
+	if e != nil {
+		t.Fatal(e)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || string(body) != "allowed" || res.TLS == nil || res.TLS.NegotiatedProtocol != "h2" {
+		t.Fatalf("status %d protocol %v body %q", res.StatusCode, res.TLS, body)
+	}
+	denied, e := client.Get("https://git.example.com/admin")
+	if e != nil {
+		t.Fatal(e)
+	}
+	denied.Body.Close()
+	if denied.StatusCode != 403 || denied.TLS == nil || denied.TLS.NegotiatedProtocol != "h2" {
+		t.Fatalf("denied status %d protocol %v", denied.StatusCode, denied.TLS)
+	}
+}
 func TestDestinationSafety(t *testing.T) {
 	for _, s := range []string{"127.0.0.1", "10.0.0.1", "169.254.169.254", "100.64.0.1", "::1", "::ffff:127.0.0.1", "fc00::1", "2001:db8::1"} {
 		if PublicIP(net.ParseIP(s)) {

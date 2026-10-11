@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -40,12 +41,15 @@ func Pod(ctx context.Context, c client.Client, controlNamespace, workspace strin
 	return w, &pods.Items[0], nil
 }
 
-func Exec(ctx context.Context, config *rest.Config, namespace, pod string, in io.Reader, out, errOut io.Writer, tty bool) error {
+func Exec(ctx context.Context, config *rest.Config, namespace, pod string, command []string, in io.Reader, out, errOut io.Writer, tty bool) error {
+	if len(command) == 0 {
+		return errors.New("command required")
+	}
 	clientset, e := kubernetes.NewForConfig(config)
 	if e != nil {
 		return e
 	}
-	request := clientset.CoreV1().RESTClient().Post().Resource("pods").Name(pod).Namespace(namespace).SubResource("exec").VersionedParams(&corev1.PodExecOptions{Container: "workspace", Command: []string{"/bin/sh"}, Stdin: true, Stdout: true, Stderr: true, TTY: tty}, scheme.ParameterCodec)
+	request := clientset.CoreV1().RESTClient().Post().Resource("pods").Name(pod).Namespace(namespace).SubResource("exec").VersionedParams(&corev1.PodExecOptions{Container: "workspace", Command: command, Stdin: true, Stdout: true, Stderr: true, TTY: tty}, scheme.ParameterCodec)
 	executor, e := remotecommand.NewSPDYExecutor(config, "POST", request.URL())
 	if e != nil {
 		return e
@@ -61,5 +65,13 @@ func Run(ctx context.Context, c client.Client, config *rest.Config, controlNames
 	info, statErr := os.Stdin.Stat()
 	tty := statErr == nil && info.Mode()&os.ModeCharDevice != 0
 	fmt.Fprintf(os.Stderr, "%s\n", Command(pod.Namespace, pod.Name))
-	return Exec(ctx, config, pod.Namespace, pod.Name, os.Stdin, os.Stdout, os.Stderr, tty)
+	return Exec(ctx, config, pod.Namespace, pod.Name, []string{"/bin/sh"}, os.Stdin, os.Stdout, os.Stderr, tty)
+}
+
+// ExecCommand is the non-interactive command T3, Roamgate, or Orca can start.
+func ExecCommand(namespace, pod string, command []string) (string, error) {
+	if len(command) == 0 {
+		return "", errors.New("command required")
+	}
+	return fmt.Sprintf("kubectl -n %s exec %s -c workspace -- %s", namespace, pod, strings.Join(command, " ")), nil
 }

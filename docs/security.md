@@ -26,13 +26,13 @@ Cilium restricts workers to their proxy and necessary DNS resolution. The proxy 
 
 Project pods use an explicit CoreDNS service rather than inheriting the node-local resolver. This keeps their resolver selection consistent with endpoint-scoped DNS policy. Node-local interception and service routing still require dataplane qualification. The controller rejects unsupported resolver settings and does not grant unrestricted host DNS access.
 
-The current implementation supports CONNECT on port 443 and inspected HTTP/1.1. It rejects escaped paths, alternate authorities, protocol upgrades and requests larger than 128 MiB. WebSocket, HTTP/2-only and certificate-pinned clients are not supported. There is no opaque tunnel fallback. This conservative path handling may require explicit compatibility work for some clients.
+The current implementation supports CONNECT on port 443. Negotiated HTTP/2 and HTTP/1.1 are both inspected with the same host, method and path rules. It rejects escaped paths, alternate authorities, protocol upgrades and requests larger than 128 MiB. WebSocket and certificate-pinned clients are not supported. There is no opaque tunnel fallback.
 
 Request bodies are forwarded, not classified or filtered. Allowed API requests, Git pushes and other permitted writes can carry source code or secrets. HTTPS filtering does not provide a source-code confidentiality guarantee. Telemetry endpoints are also possible outbound data channels.
 
 Policy creation and a Cilium CRD check do not prove enforcement. Broad cluster policies, host networking, node-local DNS and runtime differences must be checked in an actual cluster. Creating a pod before network enforcement is ready must not allow unfiltered bootstrap traffic. The release qualification requires an independent bypass test.
 
-Each project has an inspection CA with a one-year lifetime. Leaf certificates renew in the running proxy. CA rotation is not implemented; recreate the project before CA expiry. Production release work must qualify rotation and long-lived client behavior.
+Each project has an inspection CA with a one-year lifetime. Leaf certificates renew in the running proxy. Set the annotation `projects.agentwork.dev/ca-generation` to the next integer to mint a new CA, update the worker trust bundle, and restart the proxy and worker. The private key stays in the control ledger and the proxy. The generation cannot skip or go backwards. Removal still requires a new project before access can be granted again.
 
 ## Removal and recovery
 

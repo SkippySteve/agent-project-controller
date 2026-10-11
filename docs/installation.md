@@ -63,7 +63,7 @@ Before trusting a cluster, run `agent-project-controller preflight` with the sam
 
 ## Client limit
 
-Inspection is HTTP/1.1 through an HTTP CONNECT to port 443. HTTP/2-only clients, WebSocket upgrades and certificate-pinned clients stay blocked. There is no opaque tunnel and no HTTP/2 inspection. This is the same class of limit that blocks clients which speak only HTTP/2 to their model endpoint. Allowing a registry host does not change that limit.
+Inspection is an HTTP CONNECT to port 443. The proxy then inspects the negotiated HTTP/2 or HTTP/1.1 request with the same host, method and path rules. WebSocket upgrades and certificate-pinned clients stay blocked. There is no opaque tunnel. Allowing a registry host does not change that limit.
 
 ## Using a project
 
@@ -76,13 +76,13 @@ Sign in, select a repository and enter a project name. The dashboard can also se
 | python | `pypi.org`, `files.pythonhosted.org` |
 | rust | `index.crates.io`, `static.crates.io` |
 
-A Ready project shows a `kubectl exec` command for the `workspace` container. `agent-project-controller connect <workspace>` runs that shell with the local kubeconfig. The worker does not open an SSH port or any other ingress. Orca, T3 and Roamgate can use the workspace when they can start that command. The command requires phase `Ready`, a recorded namespace and exactly one worker pod.
+A Ready project shows a `kubectl exec` command for the `workspace` container. `agent-project-controller connect <workspace>` runs that shell with the local kubeconfig. The worker does not open an SSH port or any other ingress. A local process can use `connect` or `exec`. Tools that need a preview listener are not attached to the worker. The command requires phase `Ready`, a recorded namespace and exactly one worker pod.
 
 Initial cloning creates a dedicated `agent/apc-<workspace-uid>` local branch. Agents can push ordinary non-main branches and open PRs using the project token. No provider credential or unattended task is enabled automatically.
 
 The repository is cloned into `/workspace/repo`. Home, caches and configuration live under the same project volume. Pause preserves that volume and the Git identity. On resume, bootstrap fetches remote updates without resetting the current branch or overwriting local edits. Agents use normal Git commands to incorporate fetched changes and push reviewed work.
 
-Model credentials stay out of the image. Create a Secret named `model-access` in the project namespace when a tool needs them. The worker mounts it read-only at `/run/model` and tolerates its absence. Do not copy an owner refresh token into the image or that Secret from the controller. Authenticated model calls are a separate qualification.
+Model credentials stay out of the image. Create a Secret named `model-access` in the project namespace when a tool needs them. The worker mounts it read-only at `/run/model` and tolerates its absence. The controller rejects that Secret when it contains a refresh token, and it never copies an owner refresh token into the image or the Secret. `agent-project-controller exec <workspace> -- <command>` runs one command in the workspace for a tool that can start a local process.
 
 Add any other HTTPS destinations at project creation through the API or custom resource. The initial policy is immutable: broadening it requires a new environment. Extra host access is never inferred from package files. Package registries often redirect to additional hosts, which must be explicitly authorized. List every host before creation.
 

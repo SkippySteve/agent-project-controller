@@ -19,6 +19,13 @@ func TestCommand(t *testing.T) {
 	if got != want {
 		t.Fatal(got)
 	}
+	line, e := ExecCommand("apc-123", "project", []string{"git", "status"})
+	if e != nil || line != "kubectl -n apc-123 exec project -c workspace -- git status" {
+		t.Fatal(line, e)
+	}
+	if _, e = ExecCommand("apc-123", "project", nil); e == nil {
+		t.Fatal("empty command accepted")
+	}
 }
 
 func TestPodRequiresReadySingleton(t *testing.T) {
