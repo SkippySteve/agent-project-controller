@@ -269,6 +269,8 @@ def command_ledger_roundtrip(args):
             time.sleep(3)
         if run(["get", "namespace", ns], check=False).returncode == 0:
             raise SystemExit("removed workspace kept its namespace")
+        # Clear the request finalizer while its controller is still running.
+        run(["-n", args.namespace, "delete", "projectworkspace", args.workspace, "--wait=true", "--timeout=45s"])
         recovery_complete = True
     except BaseException:
         if scaled_down:
