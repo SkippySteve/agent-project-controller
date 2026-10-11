@@ -111,6 +111,9 @@ class Operator:
         if revoke:
             if current:
                 self.run(['-n', namespace, 'delete', 'secret', 'model-access'])
+            self.paused(w['metadata']['uid'])
+            if self.get('secret', 'model-access', namespace, absent=True) is not None:
+                raise RuntimeError('grant removal not verified')
             return {'workspace': self.name, 'revoked': True, 'worker_terminated': True, 'phase': 'Paused'}
         if float(fields['expires-at']) <= time.time() + 60:
             raise RuntimeError('grant expired while pausing; not resumed')
