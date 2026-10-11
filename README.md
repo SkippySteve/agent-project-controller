@@ -4,6 +4,8 @@ A Go controller that gives selected Forgejo repositories isolated project enviro
 
 An alpha pilot has run on a live Cilium and gVisor cluster with upstream Agent Sandbox. The qualified combination is Kubernetes 1.36.2, Agent Sandbox 1.0.4, Cilium 1.19.5, gVisor, Forgejo 15.0.9 and Authentik 2026.5.6. See [installation](docs/installation.md), [security boundaries](docs/security.md), [API](docs/api.md) and [qualification](docs/qualification.md) for the evidence and the remaining limits. Deploy digest-pinned images. The moving `:pilot` tag is not a release.
 
+The public source mirror is https://github.com/SkippySteve/agent-project-controller. It does not carry Forgejo issues or pull requests. Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
+
 ## Relationship to Agent Sandbox
 
 This project consumes the upstream Kubernetes Agent Sandbox API. It does not fork its controller or replace its workload lifecycle machinery.
