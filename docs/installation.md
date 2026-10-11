@@ -77,3 +77,44 @@ Telemetry outages do not authorize access or prevent revocation. Workspace appli
 Keep one controller replica. OIDC sessions are invalidated on restart; credentials, requests and audit records persist in Kubernetes. Back up control-plane state through an operator-controlled encrypted backup procedure. If the credential ledger is lost, the controller deliberately leaves cleanup incomplete rather than guessing at external access.
 
 Before uninstalling, set every workspace's desired state to `Removed` and verify its status, disabled Forgejo account and deleted backing volume. Do not remove the CRD, force finalizers, uninstall the controller or prune its control namespace while active workspaces remain. Those actions can strand grants and data. The controller retains scrubbed credential tombstones and immutable audit ConfigMaps; their retention is an operator decision.
+
+## Single-package installation
+
+The alpha Helm chart in `charts/agent-project-controller` installs the Go
+controller, embedded dashboard, API, ProjectWorkspace CRD and Kubernetes RBAC.
+The dashboard is a client of the same documented API. A separate UI deployment
+is optional future work, not an installation requirement.
+
+Provide digest-pinned `controllerImage` and `workspaceImage`, and fill the
+required Forgejo, public-origin and OIDC settings in `values.yaml`. Provision
+`existingSecret` independently with `forgejo-token` and `oidc-client-secret`.
+If `automationAPI.enabled` is true it also needs `api-secret`, at least 32
+characters. The chart neither generates nor embeds these credentials.
+
+```sh
+helm upgrade --install project-controller ./charts/agent-project-controller \
+  --namespace agent-project-controller --create-namespace --values operator-values.yaml
+```
+
+Install only one release per control namespace. Existing Agent Sandbox, Cilium,
+a qualified runtime and a Delete-reclaim storage class are prerequisites.
+Expose the controller Service through your existing HTTPS ingress or Gateway.
+The chart does not replace the cluster's network, ingress or authentication
+platform. Helm manages CRDs conservatively: apply reviewed CRD schema upgrades
+separately before upgrading the controller. Uninstalling the chart is not a
+workspace revocation workflow. Request and verify removal of every workspace
+first so external repository access and project storage are cleaned up.
+
+The coding image is optional and separately published so adopters can choose
+other tools. See [deployment profiles](deployment.md). This remains an alpha
+package: publish live qualification evidence before calling it a supported
+production release.
+
+Configuration changes roll the controller automatically through a pod-template checksum.
+After rotating an externally managed control Secret, restart the controller so
+it reloads the new credentials. Use a dedicated control namespace. The controller
+pod is hardened; project namespaces additionally enforce restricted Pod Security.
+
+Dashboard logout invalidates the local session and opens a signed-out page.
+It does not sign you out of the identity provider or your other applications.
+Select Sign in to start a new dashboard session.

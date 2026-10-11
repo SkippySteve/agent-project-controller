@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
 	"io"
 	"net"
@@ -93,5 +94,17 @@ func TestPathBoundaries(t *testing.T) {
 	}
 	if !strings.Contains(c.Rules[0].Host, "*") {
 		t.Fatal("test fixture")
+	}
+}
+
+func TestTransportFailureClassificationDoesNotExposeErrorText(t *testing.T) {
+	if failureKind(io.EOF) != "eof" {
+		t.Fatal("EOF not classified")
+	}
+	if failureKind(errors.New("https://private.example/path?token=private-token")) != "transport" {
+		t.Fatal("unclassified errors must produce only a fixed label")
+	}
+	if failureKind(errors.New("http: ContentLength=12 with Body length 0")) != "body_length" {
+		t.Fatal("body length mismatch not classified")
 	}
 }

@@ -1,0 +1,30 @@
+{{- range $key := list "CONTROL_NAMESPACE" "WORKSPACE_IMAGE" "PROXY_IMAGE" "LISTEN_ADDR" "FORGEJO_TOKEN_FILE" "OIDC_CLIENT_SECRET_FILE" "API_SECRET_FILE" }}
+{{- if hasKey $.Values.config $key }}
+{{- fail (printf "config.%s is managed by the chart; use the corresponding chart setting" $key) }}
+{{- end }}
+{{- end }}
+{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" .Values.controllerImage) }}
+{{- fail "controllerImage must use @sha256:<64 lowercase hex characters>" }}
+{{- end }}
+{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" .Values.workspaceImage) }}
+{{- fail "workspaceImage must use @sha256:<64 lowercase hex characters>" }}
+{{- end }}
+{{- range $key := list "FORGEJO_ORIGIN" "FORGEJO_OWNER" "PUBLIC_ORIGIN" "OIDC_ISSUER" "OIDC_CLIENT_ID" }}
+{{- $_ := required (printf "config.%s is required" $key) (index $.Values.config $key) }}
+{{- end }}
+{{- $proxyImage := default .Values.controllerImage .Values.proxyImage }}
+{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $proxyImage) }}
+{{- fail "proxyImage must use @sha256:<64 lowercase hex characters>" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: controller-config
+data:
+  CONTROL_NAMESPACE: {{ .Release.Namespace | quote }}
+  LISTEN_ADDR: "0.0.0.0:8080"
+  PROXY_IMAGE: {{ $proxyImage | quote }}
+  WORKSPACE_IMAGE: {{ .Values.workspaceImage | quote }}
+{{- range $key, $value := .Values.config }}
+  {{ $key }}: {{ $value | toString | quote }}
+{{- end }}

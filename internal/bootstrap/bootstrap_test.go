@@ -165,3 +165,18 @@ func TestCredentialScopeAndMalformedRequests(t *testing.T) {
 		t.Fatal("multiline credential accepted")
 	}
 }
+
+func TestCredentialAcceptsGitCapabilitiesAndRejectsAmbiguousIdentity(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "username"), []byte("bot"), 0600)
+	_ = os.WriteFile(filepath.Join(dir, "token"), []byte("fixture-token"), 0600)
+	base := "capability[]=authtype\ncapability[]=state\nwwwauth[]=Basic realm=Git\nwwwauth[]=Bearer\nprotocol=https\nhost=git.example.com\npath=owner/repo.git\n"
+	var output bytes.Buffer
+	if err := credential(strings.NewReader(base+"\n"), &output, dir, "git.example.com", "owner/repo"); err != nil || !strings.Contains(output.String(), "password=fixture-token") {
+		t.Fatal("standard multi-valued Git fields rejected")
+	}
+	output.Reset()
+	if err := credential(strings.NewReader(base+"host=evil.example.com\n\n"), &output, dir, "git.example.com", "owner/repo"); err == nil || output.Len() != 0 {
+		t.Fatal("duplicate host released credentials")
+	}
+}

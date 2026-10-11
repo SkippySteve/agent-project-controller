@@ -43,6 +43,7 @@ var sandboxGVK = schema.GroupVersionKind{Group: "agents.x-k8s.io", Version: "v1b
 
 type Config struct {
 	Namespace, ForgejoOrigin, Owner, Image, RuntimeClass, StorageClass string
+	ProxyImage                                                         string
 	StorageSize                                                        string
 	WorkerResources, ProxyResources                                    ResourceProfile
 }
@@ -57,14 +58,22 @@ func (c Config) Validate() error {
 	if _, _, e := c.resources(); e != nil {
 		return e
 	}
-	digest := strings.Split(c.Image, "@sha256:")
-	if len(digest) != 2 || digest[0] == "" || len(digest[1]) != 64 {
-		return errors.New("workspace image requires a sha256 digest")
-	}
-	if _, e := hex.DecodeString(digest[1]); e != nil {
-		return errors.New("invalid image digest")
+	for _, image := range []string{c.Image, c.proxyImage()} {
+		digest := strings.Split(image, "@sha256:")
+		if len(digest) != 2 || digest[0] == "" || len(digest[1]) != 64 {
+			return errors.New("workspace image requires a sha256 digest")
+		}
+		if _, e := hex.DecodeString(digest[1]); e != nil {
+			return errors.New("invalid image digest")
+		}
 	}
 	return nil
+}
+func (c Config) proxyImage() string {
+	if c.ProxyImage != "" {
+		return c.ProxyImage
+	}
+	return c.Image
 }
 
 type Reconciler struct {
@@ -452,7 +461,7 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 		}
 	case *corev1.Service:
 		actual := existing.(*corev1.Service)
-		if !contains(actual.Spec.Selector, expected.Spec.Selector) || !contains(actual.Spec.Ports, expected.Spec.Ports) || actual.Spec.Type != corev1.ServiceTypeClusterIP && actual.Spec.Type != "" {
+		if actual.Spec.ClusterIP != expected.Spec.ClusterIP || !contains(actual.Spec.Selector, expected.Spec.Selector) || !contains(actual.Spec.Ports, expected.Spec.Ports) || actual.Spec.Type != corev1.ServiceTypeClusterIP && actual.Spec.Type != "" {
 			return errors.New("proxy service drift detected")
 		}
 	}
@@ -698,11 +707,11 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 		&corev1.ConfigMap{ObjectMeta: metadata(w, "trust"), Data: map[string]string{"ca.crt": string(s.Data["ca.crt"])}},
 		&corev1.ConfigMap{ObjectMeta: metadata(w, "proxy-policy"), Data: map[string]string{"policy.json": string(raw)}},
 		&corev1.PersistentVolumeClaim{ObjectMeta: metadata(w, "workspace"), Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &r.Config.StorageClass, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(r.Config.StorageSize)}}}},
-		&corev1.Service{ObjectMeta: metadata(w, "proxy"), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: map[string]string{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": "proxy"}, Ports: []corev1.ServicePort{{Port: 3128, TargetPort: fromInt(3128), Protocol: corev1.ProtocolTCP}}}})
+		&corev1.Service{ObjectMeta: metadata(w, "proxy"), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone, Selector: map[string]string{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": "proxy"}, Ports: []corev1.ServicePort{{Port: 3128, TargetPort: fromInt(3128), Protocol: corev1.ProtocolTCP}}}})
 	security := &corev1.SecurityContext{Privileged: boolp(false), RunAsNonRoot: boolp(true), RunAsUser: int64p(1000), RunAsGroup: int64p(1000), AllowPrivilegeEscalation: boolp(false), ReadOnlyRootFilesystem: boolp(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
 	plabels := labels(w)
 	plabels["projects.agentwork.dev/role"] = "proxy"
-	proxyDeployment := &appsv1.Deployment{ObjectMeta: metadata(w, "proxy"), Spec: appsv1.DeploymentSpec{Replicas: int32p(1), Selector: &metav1.LabelSelector{MatchLabels: plabels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: plabels}, Spec: corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(1), SecurityContext: &corev1.PodSecurityContext{FSGroup: int64p(1000)}, Containers: []corev1.Container{{Name: "proxy", Image: r.Config.Image, Args: []string{"proxy"}, SecurityContext: security, Resources: proxyResources, Ports: []corev1.ContainerPort{{ContainerPort: 3128}}, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: fromInt(3128)}}}, VolumeMounts: []corev1.VolumeMount{{Name: "tls", MountPath: "/tls", ReadOnly: true}, {Name: "policy", MountPath: "/policy", ReadOnly: true}}}}, Volumes: []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "proxy-ca", DefaultMode: int32p(0440)}}}, {Name: "policy", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "proxy-policy"}}}}}}}}}
+	proxyDeployment := &appsv1.Deployment{ObjectMeta: metadata(w, "proxy"), Spec: appsv1.DeploymentSpec{Replicas: int32p(1), Selector: &metav1.LabelSelector{MatchLabels: plabels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: plabels}, Spec: corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(1), SecurityContext: &corev1.PodSecurityContext{FSGroup: int64p(1000)}, Containers: []corev1.Container{{Name: "proxy", Image: r.Config.proxyImage(), Args: []string{"proxy"}, SecurityContext: security, Resources: proxyResources, Ports: []corev1.ContainerPort{{ContainerPort: 3128}}, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: fromInt(3128)}}}, VolumeMounts: []corev1.VolumeMount{{Name: "tls", MountPath: "/tls", ReadOnly: true}, {Name: "policy", MountPath: "/policy", ReadOnly: true}}}}, Volumes: []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "proxy-ca", DefaultMode: int32p(0440)}}}, {Name: "policy", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "proxy-policy"}}}}}}}}}
 	objects = append(objects, proxyDeployment)
 	u, _ := url.Parse(r.Config.ForgejoOrigin)
 	env := []corev1.EnvVar{{Name: "HOME", Value: "/workspace/home"}, {Name: "GIT_ORIGIN", Value: r.Config.ForgejoOrigin}, {Name: "GIT_HOST", Value: u.Host}, {Name: "GIT_REPOSITORY", Value: w.Spec.Repository}, {Name: "GIT_WORK_BRANCH", Value: "agent/" + identity(w)}, {Name: "GIT_TERMINAL_PROMPT", Value: "0"}, {Name: "HTTPS_PROXY", Value: "http://proxy:3128"}, {Name: "https_proxy", Value: "http://proxy:3128"}, {Name: "HTTP_PROXY", Value: "http://proxy:3128"}, {Name: "http_proxy", Value: "http://proxy:3128"}, {Name: "SSL_CERT_FILE", Value: "/workspace/home/ca-bundle.crt"}, {Name: "NODE_EXTRA_CA_CERTS", Value: "/trust/ca.crt"}, {Name: "REQUESTS_CA_BUNDLE", Value: "/workspace/home/ca-bundle.crt"}}

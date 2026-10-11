@@ -45,6 +45,10 @@ func credential(in io.Reader, out io.Writer, directory, host, repository string)
 		if !ok || strings.ContainsAny(line, "\r\x00") {
 			return errors.New("invalid credential request")
 		}
+		// Git documents array attributes as multi-valued. They do not select credentials.
+		if strings.HasSuffix(k, "[]") {
+			continue
+		}
 		if _, exists := values[k]; exists {
 			return errors.New("duplicate credential field")
 		}

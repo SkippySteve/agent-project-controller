@@ -1,0 +1,42 @@
+# Supply immutable image digests and deployment configuration. No credentials belong here.
+controllerImage: ''
+workspaceImage: ''
+# Optional smaller proxy image; defaults to controllerImage in the chart.
+proxyImage: ''
+existingSecret: controller-secrets
+automationAPI:
+  enabled: false
+config:
+  FORGEJO_ORIGIN: ''
+  FORGEJO_OWNER: ''
+  RUNTIME_CLASS: gvisor
+  STORAGE_CLASS: local-path
+  STORAGE_SIZE: 10Gi
+  CLUSTER_DOMAIN: cluster.local
+  DNS_SERVICE_NAMESPACE: kube-system
+  DNS_SERVICE_NAME: kube-dns
+  DNS_DIRECT_ENDPOINTS: 'false'
+  PROXY_GATEWAY_JSON: ''
+  WORKSPACE_CPU_REQUEST: 500m
+  WORKSPACE_MEMORY_REQUEST: 512Mi
+  WORKSPACE_CPU_LIMIT: '4'
+  WORKSPACE_MEMORY_LIMIT: 4Gi
+  PROXY_CPU_REQUEST: 100m
+  PROXY_MEMORY_REQUEST: 128Mi
+  PROXY_CPU_LIMIT: '1'
+  PROXY_MEMORY_LIMIT: 512Mi
+  PUBLIC_ORIGIN: ''
+  OIDC_ISSUER: ''
+  OIDC_CLIENT_ID: ''
+  OIDC_GROUPS_CLAIM: groups
+  OIDC_ALLOWED_GROUPS: agent-project-operators
+  OIDC_SCOPES: profile,groups
+  ALLOW_STATIC_LOGIN: 'false'
+  OTEL_ENABLED: 'false'
+controllerResources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: '1'
+    memory: 512Mi

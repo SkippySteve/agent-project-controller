@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -80,7 +82,8 @@ func run(ctx context.Context) error {
 	}
 	shutdown, e := telemetry.Setup(ctx, os.Getenv("OTEL_ENABLED") == "true")
 	if e != nil {
-		return e
+		slog.Warn("optional telemetry unavailable; controller enforcement continues")
+		shutdown = func(context.Context) error { return nil }
 	}
 	defer func() {
 		c, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -103,7 +106,23 @@ func run(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	reconciler := &controller.Reconciler{Client: direct, Host: host, Network: network.Cilium{ClusterDomain: env("CLUSTER_DOMAIN", "cluster.local"), DNSNamespace: env("DNS_SERVICE_NAMESPACE", "kube-system"), DNSService: env("DNS_SERVICE_NAME", "kube-dns")}, Config: controller.Config{Namespace: ns, ForgejoOrigin: host.Origin, Owner: host.Owner, Image: os.Getenv("WORKSPACE_IMAGE"), RuntimeClass: os.Getenv("RUNTIME_CLASS"), StorageClass: os.Getenv("STORAGE_CLASS"), StorageSize: env("STORAGE_SIZE", "10Gi"), WorkerResources: profile("WORKSPACE"), ProxyResources: profile("PROXY")}}
+	networkProvider := network.Cilium{ClusterDomain: env("CLUSTER_DOMAIN", "cluster.local"), DNSNamespace: env("DNS_SERVICE_NAMESPACE", "kube-system"), DNSService: env("DNS_SERVICE_NAME", "kube-dns"), DirectDNS: os.Getenv("DNS_DIRECT_ENDPOINTS") == "true"}
+	if raw := os.Getenv("PROXY_GATEWAY_JSON"); raw != "" {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		var gateway network.Gateway
+		if e := decoder.Decode(&gateway); e != nil {
+			return errors.New("invalid proxy gateway configuration")
+		}
+		if decoder.Decode(new(any)) != io.EOF {
+			return errors.New("invalid trailing proxy gateway configuration")
+		}
+		networkProvider.Gateway = &gateway
+	}
+	if e := networkProvider.Validate(); e != nil {
+		return e
+	}
+	reconciler := &controller.Reconciler{Client: direct, Host: host, Network: networkProvider, Config: controller.Config{Namespace: ns, ForgejoOrigin: host.Origin, Owner: host.Owner, Image: os.Getenv("WORKSPACE_IMAGE"), ProxyImage: os.Getenv("PROXY_IMAGE"), RuntimeClass: os.Getenv("RUNTIME_CLASS"), StorageClass: os.Getenv("STORAGE_CLASS"), StorageSize: env("STORAGE_SIZE", "10Gi"), WorkerResources: profile("WORKSPACE"), ProxyResources: profile("PROXY")}}
 	if e = reconciler.Config.Validate(); e != nil {
 		return e
 	}

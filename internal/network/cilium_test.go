@@ -7,6 +7,7 @@ import (
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -92,5 +93,83 @@ func TestDNSRejectsUnsupportedResolvers(t *testing.T) {
 	}
 	if _, e := (Cilium{ClusterDomain: "bad/domain"}).DNS(context.Background(), c, "project"); e == nil {
 		t.Fatal("invalid cluster domain accepted")
+	}
+}
+
+func TestGatewayIsProxyOnlyAndRestrictsServerNames(t *testing.T) {
+	p := Cilium{Gateway: &Gateway{Namespace: "gateway-system", Selector: map[string]string{"app.kubernetes.io/name": "gateway"}, Port: 8443}}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	objects := p.Objects("project", "uid", []string{"git.example.com"})
+	worker, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "egress")
+	proxy, _, _ := unstructured.NestedSlice(objects[1].Object, "spec", "egress")
+	if len(worker) != 2 || len(proxy) != 3 {
+		t.Fatal("gateway permissions were added to workers or omitted from proxy")
+	}
+	route := proxy[2].(map[string]any)
+	labels := route["toEndpoints"].([]any)[0].(map[string]any)["matchLabels"].(map[string]any)
+	if labels["k8s:io.kubernetes.pod.namespace"] != "gateway-system" || labels["k8s:app.kubernetes.io/name"] != "gateway" {
+		t.Fatal("gateway selector widened")
+	}
+	ports := route["toPorts"].([]any)[0].(map[string]any)
+	if !reflect.DeepEqual(ports["serverNames"], []any{"git.example.com"}) || ports["ports"].([]any)[0].(map[string]any)["port"] != "8443" {
+		t.Fatal("gateway host or port widened")
+	}
+	for _, bad := range []*Gateway{
+		{Namespace: "", Selector: map[string]string{"app": "gateway"}, Port: 443},
+		{Namespace: "gateway-system", Port: 443},
+		{Namespace: "gateway-system", Selector: map[string]string{"app": ""}, Port: 443},
+		{Namespace: "gateway-system", Selector: map[string]string{"io.kubernetes.pod.namespace": "other"}, Port: 443},
+		{Namespace: "gateway-system", Selector: map[string]string{"app": "gateway"}, Port: 0},
+	} {
+		if (Cilium{Gateway: bad}).Validate() == nil {
+			t.Fatal("incomplete or conflicting gateway accepted")
+		}
+	}
+}
+
+func TestDirectDNSUsesOnlyReadyCoreDNSPodEndpoints(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = discoveryv1.AddToScheme(scheme)
+	ready := true
+	tcp := corev1.ProtocolTCP
+	udp := corev1.ProtocolUDP
+	port := int32(53)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "dns", Namespace: "kube-system", Labels: map[string]string{"k8s-app": "kube-dns"}}, Status: corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "10.1.2.3"}}}}
+	slice := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "dns", Namespace: "kube-system", Labels: map[string]string{discoveryv1.LabelServiceName: "kube-dns"}}, AddressType: discoveryv1.AddressTypeIPv4, Ports: []discoveryv1.EndpointPort{{Port: &port, Protocol: &tcp}, {Port: &port, Protocol: &udp}}, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.1.2.3", "10.9.9.9"}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: "kube-system", Name: "dns"}}}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dnsService(), pod, slice).Build()
+	p := Cilium{DirectDNS: true}
+	config, err := p.DNS(context.Background(), c, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(config.Nameservers, []string{"10.1.2.3"}) {
+		t.Fatal("DNS trusted an unverified endpoint address")
+	}
+	ready = false
+	if err = c.Update(context.Background(), slice); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.DNS(context.Background(), c, "project"); err == nil {
+		t.Fatal("unready DNS accepted")
+	}
+}
+
+func TestGatewayCanAvoidCiliumSNIInterceptionWithoutWorkerPermissions(t *testing.T) {
+	p := Cilium{Gateway: &Gateway{Namespace: "gateway-system", Selector: map[string]string{"app": "gateway"}, Port: 8443, DisableSNIFilter: true}}
+	objects := p.Objects("project", "uid", []string{"git.example.com"})
+	worker, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "egress")
+	proxy, _, _ := unstructured.NestedSlice(objects[1].Object, "spec", "egress")
+	if len(worker) != 2 || len(proxy) != 3 {
+		t.Fatal("gateway option changed worker permissions")
+	}
+	ports := proxy[2].(map[string]any)["toPorts"].([]any)[0].(map[string]any)
+	if _, exists := ports["serverNames"]; exists {
+		t.Fatal("SNI interception remained enabled")
+	}
+	if len(proxy[2].(map[string]any)["toEndpoints"].([]any)) != 1 {
+		t.Fatal("endpoint restriction removed")
 	}
 }

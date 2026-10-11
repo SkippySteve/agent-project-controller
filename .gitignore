@@ -4,3 +4,5 @@
 *.key
 *.pem
 __pycache__/
+
+/dist/

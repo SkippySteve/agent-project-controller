@@ -1,6 +1,9 @@
 package controller
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestResourceProfiles(t *testing.T) {
 	worker, proxy, e := (Config{}).resources()
@@ -25,5 +28,20 @@ func TestResourceProfiles(t *testing.T) {
 		if _, _, e = (Config{ProxyResources: p}).resources(); e == nil {
 			t.Fatal("invalid proxy sizing accepted", p)
 		}
+	}
+}
+
+func TestOptionalProxyImageMustBePinned(t *testing.T) {
+	c := Config{Namespace: "control", Owner: "owner", RuntimeClass: "gvisor", StorageClass: "delete", StorageSize: "1Gi", Image: "registry.example.com/worker@sha256:" + strings.Repeat("a", 64)}
+	c.ProxyImage = "registry.example.com/proxy:latest"
+	if c.Validate() == nil {
+		t.Fatal("mutable proxy image accepted")
+	}
+	c.ProxyImage = "registry.example.com/proxy@sha256:" + strings.Repeat("b", 64)
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if c.proxyImage() != c.ProxyImage {
+		t.Fatal("dedicated proxy image ignored")
 	}
 }

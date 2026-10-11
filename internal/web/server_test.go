@@ -74,3 +74,24 @@ func TestOIDCDoesNotEnableEmptyStaticPassword(t *testing.T) {
 		t.Fatal("empty password bypassed OIDC")
 	}
 }
+
+func TestSignedOutPageDoesNotRestartSSOOrExposeAPI(t *testing.T) {
+	s := &Server{Origin: "https://projects.example.com", OIDC: &OIDC{}}
+	h, err := s.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, httptest.NewRequest("GET", "/auth/signed-out", nil))
+	if out.Code != 200 || out.Header().Get("Location") != "" || !strings.Contains(out.Body.String(), "Your dashboard session has ended") {
+		t.Fatal("signed-out page redirects to SSO")
+	}
+	out = httptest.NewRecorder()
+	h.ServeHTTP(out, httptest.NewRequest("GET", "/api/v1/workspaces", nil))
+	if out.Code != 401 {
+		t.Fatal("signed-out client can access projects")
+	}
+	if !strings.Contains(string(app), "location.assign('/auth/signed-out')") {
+		t.Fatal("logout reloads the protected dashboard")
+	}
+}

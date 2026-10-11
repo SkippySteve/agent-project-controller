@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -249,6 +250,31 @@ func readRequest(reader *bufio.Reader) (*http.Request, error) {
 	}
 	return http.ReadRequest(bufio.NewReader(io.MultiReader(bytes.NewReader(header), reader)))
 }
+
+// failureKind intentionally excludes error text: transport errors can contain URLs.
+func failureKind(err error) string {
+	if errors.Is(err, io.EOF) {
+		return "eof"
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return "unexpected_eof"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return "dns"
+	}
+	var network net.Error
+	if errors.As(err, &network) && network.Timeout() {
+		return "timeout"
+	}
+	if strings.HasPrefix(err.Error(), "http: ContentLength=") {
+		return "body_length"
+	}
+	return "transport"
+}
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "CONNECT" {
 		http.Error(w, "CONNECT required", 405)
@@ -334,6 +360,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			req.Body.Close()
 			cancel()
+			slog.Warn("proxy upstream request failed", "failure_kind", failureKind(e))
 			writeError(conn, 502, "upstream unavailable")
 			return
 		}

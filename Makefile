@@ -9,3 +9,9 @@ render:
 	kubectl kustomize config/deploy
 qualify-forgejo:
 	python3 scripts/qualify-forgejo.py
+
+.PHONY: chart-check package
+chart-check:
+	APC_HELM_TEST=true go test -count=1 ./internal/installation
+package: chart-check
+	helm package charts/agent-project-controller --destination dist

@@ -97,6 +97,15 @@ func (s *Server) Handler() (http.Handler, error) {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		if s.OIDC != nil && r.Method == "GET" {
+			if r.URL.Path == "/auth/signed-out" {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				io.WriteString(w, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Signed out</title><link rel="stylesheet" href="/style.css"><main><h1>You are signed out</h1><p>Your dashboard session has ended. Your identity provider may still have a login session.</p><a href="/auth/login">Sign in</a></main></html>`)
+				return
+			}
+			if r.URL.Path == "/style.css" {
+				mux.ServeHTTP(w, r)
+				return
+			}
 			if r.URL.Path == "/auth/login" {
 				s.OIDC.Login(w, r)
 				return

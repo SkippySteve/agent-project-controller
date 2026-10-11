@@ -1,0 +1,8 @@
+Install Agent Sandbox and the qualified Cilium/runtime/storage profile before requesting projects.
+This alpha package serves the dashboard and API from the same controller process.
+Expose Service controller port 8080 through your existing HTTPS ingress or Gateway.
+Configure the OIDC callback as {{ .Values.config.PUBLIC_ORIGIN }}/auth/callback.
+The existing Secret {{ .Values.existingSecret }} requires forgejo-token and oidc-client-secret.
+{{ if .Values.automationAPI.enabled }}It also requires api-secret of at least 32 characters.{{ end }}
+The chart does not install prerequisites, create provider credentials or migrate broker projects.
+Only one controller release is supported per namespace.

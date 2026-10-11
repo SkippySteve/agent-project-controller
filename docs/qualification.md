@@ -54,3 +54,36 @@ Use disposable namespaces and repositories. Do not remove or replace an existing
 9. Document snapshot/backup retention, disabled-user retention, audit retention, inspection-CA rotation and recovery after loss of the control namespace.
 
 Results must identify image digests and exact Kubernetes, Agent Sandbox, Cilium, runtime, Forgejo, DNS, storage and identity-provider versions. A CRD's presence or a successful manifest apply is not qualification.
+
+## Alpha pilot observations
+
+A disposable Linux amd64 pilot exercised Kubernetes 1.36.2, upstream Agent
+Sandbox 1.0.4, Cilium 1.19.5, Forgejo 15.0.9 and Authentik 2026.5.6. Its gVisor
+worker cloned a private repository, pushed an agent branch and opened a PR.
+Forgejo rejected main pushes, forced main pushes, main deletion, main content
+API writes and agent PR merges. The same scoped token could not read another
+private repository independently of the proxy.
+
+The live dashboard passed OIDC group allow/deny and project create, Ready,
+pause, resume and removal. Logout ended the local session, left a signed-out
+page and returned 401 for subsequent API access. A local untracked edit survived
+pause/resume. Direct Forgejo, public HTTPS, Kubernetes API, metadata and
+node-local DNS connections were denied, as was another project's proxy.
+An active proxy connection ended during removal; the old token returned 401,
+the namespace and PV disappeared, and the backing directory was absent on the
+storage node.
+
+The cluster required direct inspected CoreDNS endpoints, a headless project
+proxy service, and an explicit gateway route. Cilium SNI interception reset
+connections to the same-node gateway. With that extra gateway interception
+explicitly disabled, the inspecting proxy still enforced HTTPS rules. A fresh
+profile passed 100 reads and 20 merge denials without a 502 response. These
+results qualify that specific compatibility choice, not other dataplanes.
+
+Local tests also exercise upstream Sandbox CRD defaults with a real API server,
+the Helm package, Git credential array fields, and nonblocking telemetry
+recording with an unavailable collector. Full interruption/outage acceptance,
+CA rotation, DNS endpoint recovery, authenticated model tasks, remote-tool
+integrations and external backup restore remain incomplete. The pilot did not
+retire an existing broker or enable unattended work. Deployment-specific pins
+and evidence remain in the operator's private infrastructure repository.
