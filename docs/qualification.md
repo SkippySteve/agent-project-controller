@@ -39,6 +39,8 @@ APC_BROWSER_TEST=true PLAYWRIGHT_MODULE_PATH=/path/to/node_modules/playwright go
 
 This uses the real Go HTTP handler with a fake Kubernetes client. It checks project creation, pause, resume, removal and audit rendering, including JavaScript errors. It does not provision a running sandbox. Node and Chromium are test tools only.
 
+The inspected HTTP/2 streaming regression uses a local TLS upstream that sends a small server-sent event and keeps the response open. The client must receive the event before upstream completion. This checks streaming delivery and cancellation without model credentials; it does not qualify authenticated inference.
+
 ## Required cluster qualification before release
 
 Use disposable namespaces and repositories. Do not remove or replace an existing broker until these checks pass.
