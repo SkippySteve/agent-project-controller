@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -73,9 +74,16 @@ func credential(in io.Reader, out io.Writer, directory, host, repository string)
 	return e
 }
 func Run(ctx context.Context) error {
-	return run(ctx, "/workspace", "/etc/ssl/certs/ca-certificates.crt", "/trust/ca.crt", os.Getenv("GIT_ORIGIN")+"/"+os.Getenv("GIT_REPOSITORY")+".git", os.Getenv("GIT_WORK_BRANCH"))
+	username, err := os.ReadFile("/identity/username")
+	if err != nil {
+		return errors.New("project Git author identity unavailable")
+	}
+	return run(ctx, "/workspace", "/etc/ssl/certs/ca-certificates.crt", "/trust/ca.crt", os.Getenv("GIT_ORIGIN")+"/"+os.Getenv("GIT_REPOSITORY")+".git", os.Getenv("GIT_WORK_BRANCH"), strings.TrimSpace(string(username)))
 }
-func run(ctx context.Context, workspace, rootsPath, trustPath, origin, branch string) error {
+func run(ctx context.Context, workspace, rootsPath, trustPath, origin, branch, username string) error {
+	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`).MatchString(username) {
+		return errors.New("invalid project Git author identity")
+	}
 	home := filepath.Join(workspace, "home")
 	// A previous readiness marker must not survive a failed resume fetch.
 	if e := os.Remove(filepath.Join(workspace, ".ready")); e != nil && !os.IsNotExist(e) {
@@ -130,6 +138,20 @@ func run(ctx context.Context, workspace, rootsPath, trustPath, origin, branch st
 		}
 		if e = git(ctx, "-C", target, "fetch", "origin"); e != nil {
 			return e
+		}
+	}
+	for key, value := range map[string]string{"user.name": username, "user.email": username + "@agentwork.invalid"} {
+		command := exec.CommandContext(ctx, "git", "-C", target, "config", "--get", key)
+		existing, err := command.Output()
+		if err == nil && strings.TrimSpace(string(existing)) != "" {
+			continue
+		}
+		var exit *exec.ExitError
+		if err != nil && (!errors.As(err, &exit) || exit.ExitCode() != 1) {
+			return errors.New("project Git author configuration unavailable")
+		}
+		if err := git(ctx, "-C", target, "config", key, value); err != nil {
+			return err
 		}
 	}
 	return os.WriteFile(filepath.Join(workspace, ".ready"), []byte("prepared\n"), 0600)

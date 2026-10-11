@@ -57,7 +57,7 @@ func repositoryFixture(t *testing.T) (workspace, roots, trust, origin, seed stri
 func TestCloneAndResumePreserveLocalWork(t *testing.T) {
 	workspace, roots, trust, origin, seed := repositoryFixture(t)
 	ctx := context.Background()
-	if e := run(ctx, workspace, roots, trust, origin, "agent/fixture"); e != nil {
+	if e := run(ctx, workspace, roots, trust, origin, "agent/fixture", "fixture"); e != nil {
 		t.Fatal(e)
 	}
 	repo := filepath.Join(workspace, "repo")
@@ -78,7 +78,7 @@ func TestCloneAndResumePreserveLocalWork(t *testing.T) {
 	gitOutput(t, "-C", seed, "commit", "-m", "Remote update")
 	gitOutput(t, "-C", seed, "push", "origin", "main")
 	upstream := gitOutput(t, "-C", seed, "rev-parse", "HEAD")
-	if e := run(ctx, workspace, roots, trust, origin, "agent/fixture"); e != nil {
+	if e := run(ctx, workspace, roots, trust, origin, "agent/fixture", "fixture"); e != nil {
 		t.Fatal(e)
 	}
 	if gitOutput(t, "-C", repo, "rev-parse", "HEAD") != head || gitOutput(t, "-C", repo, "branch", "--show-current") != "agent/fixture" {
@@ -93,13 +93,13 @@ func TestCloneAndResumePreserveLocalWork(t *testing.T) {
 			t.Fatal("resume lost local work")
 		}
 	}
-	if e := run(ctx, workspace, roots, trust, origin+".missing", "agent/fixture"); e == nil {
+	if e := run(ctx, workspace, roots, trust, origin+".missing", "agent/fixture", "fixture"); e == nil {
 		t.Fatal("missing remote accepted")
 	}
 	if _, e := os.Stat(filepath.Join(workspace, ".ready")); !os.IsNotExist(e) {
 		t.Fatal("failed resume retained stale readiness marker")
 	}
-	if e := run(ctx, workspace, roots, trust, origin, "agent/fixture"); e != nil {
+	if e := run(ctx, workspace, roots, trust, origin, "agent/fixture", "fixture"); e != nil {
 		t.Fatal("resume did not recover", e)
 	}
 }
@@ -107,7 +107,7 @@ func TestCloneAndResumePreserveLocalWork(t *testing.T) {
 func TestInterruptedCloneRetriesAtomically(t *testing.T) {
 	workspace, roots, trust, origin, _ := repositoryFixture(t)
 	ctx := context.Background()
-	if e := run(ctx, workspace, roots, trust, origin, "../invalid"); e == nil {
+	if e := run(ctx, workspace, roots, trust, origin, "../invalid", "fixture"); e == nil {
 		t.Fatal("invalid branch accepted")
 	}
 	for _, name := range []string{"repo", ".ready"} {
@@ -119,7 +119,7 @@ func TestInterruptedCloneRetriesAtomically(t *testing.T) {
 	if e := os.WriteFile(filepath.Join(stage, "partial"), []byte("leftover"), 0600); e != nil {
 		t.Fatal(e)
 	}
-	if e := run(ctx, workspace, roots, trust, origin, "agent/retry"); e != nil {
+	if e := run(ctx, workspace, roots, trust, origin, "agent/retry", "fixture"); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := os.Stat(filepath.Join(workspace, "repo", "partial")); !os.IsNotExist(e) {
@@ -178,5 +178,27 @@ func TestCredentialAcceptsGitCapabilitiesAndRejectsAmbiguousIdentity(t *testing.
 	output.Reset()
 	if err := credential(strings.NewReader(base+"host=evil.example.com\n\n"), &output, dir, "git.example.com", "owner/repo"); err == nil || output.Len() != 0 {
 		t.Fatal("duplicate host released credentials")
+	}
+}
+
+func TestPreparedProjectCanCommitAndResumePreservesAuthor(t *testing.T) {
+	workspace, roots, trust, origin, _ := repositoryFixture(t)
+	ctx := context.Background()
+	if err := run(ctx, workspace, roots, trust, origin, "agent/author", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(workspace, "repo")
+	gitOutput(t, "-C", repo, "commit", "--allow-empty", "-m", "Agent can commit")
+	if got := gitOutput(t, "-C", repo, "log", "-1", "--format=%an <%ae>"); got != "fixture <fixture@agentwork.invalid>" {
+		t.Fatal("commit author differs from bot identity", got)
+	}
+	gitOutput(t, "-C", repo, "config", "user.name", "Explicit author")
+	gitOutput(t, "-C", repo, "config", "user.email", "explicit@example.invalid")
+	if err := run(ctx, workspace, roots, trust, origin, "agent/author", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	gitOutput(t, "-C", repo, "commit", "--allow-empty", "-m", "Preserve author")
+	if got := gitOutput(t, "-C", repo, "log", "-1", "--format=%an <%ae>"); got != "Explicit author <explicit@example.invalid>" {
+		t.Fatal("resume replaced explicit author", got)
 	}
 }

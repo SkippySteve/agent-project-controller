@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.request
 
 
 class RPC:
@@ -99,10 +100,37 @@ class RPC:
             self.process.wait()
 
 
+def git_workflow(repo):
+    branch = subprocess.check_output(['git', '-C', str(repo), 'branch', '--show-current'], text=True).strip()
+    if not branch.startswith('agent/apc-'):
+        raise RuntimeError('qualification-branch-required')
+    for args in (['add', 'add.py', 'test_add.py'], ['commit', '-m', 'Add synthetic coding fixture and passing tests.'], ['push', 'origin', 'HEAD']):
+        result = subprocess.run(['git', '-C', str(repo), *args], capture_output=True, timeout=30)
+        if result.returncode:
+            raise RuntimeError('qualification-git-' + args[0] + '-failed')
+    repository = os.environ['GIT_REPOSITORY']
+    if not repository.split('/')[-1].startswith('qualification-'):
+        raise RuntimeError('qualification-repository-required')
+    token = Path('/identity/token').read_text().strip()
+    body = {'title': 'Synthetic coding qualification', 'head': branch, 'base': 'main',
+            'body': 'Three generated Python tests passed. Disposable fixture only; do not merge.'}
+    request = urllib.request.Request('https://' + os.environ['GIT_HOST'] + '/api/v1/repos/' + repository + '/pulls',
+        data=json.dumps(body).encode(), headers={'Authorization': 'token ' + token, 'Content-Type': 'application/json'}, method='POST')
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            pr = json.load(response)
+    except Exception:
+        raise RuntimeError('qualification-pr-creation-failed') from None
+    return {'branch_pushed': True, 'pr_created': True, 'pr_url': pr['html_url']}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--coding', action='store_true')
+    parser.add_argument('--git-workflow', action='store_true')
     args = parser.parse_args()
+    if args.git_workflow and not args.coding:
+        parser.error("--git-workflow requires --coding")
     repo = Path('/workspace/repo')
     origin = subprocess.check_output(['git', '-C', str(repo), 'remote', 'get-url', 'origin'], text=True).strip()
     if '/qualification-' not in origin or not origin.endswith('.git'):
@@ -165,7 +193,9 @@ def main():
                 verify = subprocess.run(['python3', '-I', '-m', 'unittest', '-v'], cwd=repo, capture_output=True, timeout=30)
                 result['independent_tests_passed'] = verify.returncode == 0 and b'Ran 3 tests' in verify.stderr
                 result['files_created'] = all((repo / name).is_file() for name in ('add.py', 'test_add.py'))
-                result['passed'] = result['passed'] and result['independent_tests_passed'] and result['files_created']
+                result['passed'] = result['passed'] and result['independent_tests_passed'] and result['files_created'] and rpc.completed_commands > 0
+                if result['passed'] and args.git_workflow:
+                    result.update(git_workflow(repo))
         except (RuntimeError, KeyError, IndexError) as error:
             result['failure'] = str(error) if isinstance(error, RuntimeError) else 'invalid-protocol-response'
         finally:
