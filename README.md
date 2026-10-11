@@ -59,6 +59,29 @@ OpenRig, Orca and other tools can operate within prepared project environments. 
 
 OpenRig can provide agent roles, queues, messaging and session coordination. Its Node/TypeScript runtime would be a separate optional component inside the environment; this project's backend remains Go. Integration has not been implemented or qualified.
 
+## Optional observability
+
+Instrument the Go control backend with OpenTelemetry. Optional OTLP export should cover lifecycle traces, operation latency, failures, active environments and pending revocations or cleanup. Correlate structured logs with operation IDs and trace IDs. Keep metric dimensions bounded; project IDs belong in access-controlled logs and traces rather than unbounded metric labels.
+
+Export to an operator-selected OTLP endpoint, directly or through an OpenTelemetry Collector. No specific observability backend, Collector, Hubble or OpenTelemetry Operator is required for core operation. Disable export by default and use bounded buffering and timeouts so an unavailable telemetry service cannot block revocation or cleanup.
+
+Persistent access audit records and lifecycle status are core features even when telemetry export is disabled. Exported telemetry is not the authoritative access ledger or proof of enforcement. Protect audit records in the trusted control plane and report failures to persist security decisions.
+
+Do not capture tokens, authorization headers, source code, prompts, responses or inspected request bodies by default. Treat repository names and URLs as sensitive metadata. Agent and project-application instrumentation is a separate opt-in capability, not automatic collection of agent conversations. Any workspace telemetry endpoint needs explicit network authorization, authentication, tenant separation and volume limits; it is another potential outbound data channel.
+
+## Initial adoption requirements
+
+The first supported secure deployment profile is planned to require:
+
+- A Kubernetes cluster with a qualified upstream Agent Sandbox controller and core Sandbox CRD. Optional template, claim and warm-pool extensions are unnecessary initially.
+- Cilium as the initially qualified network enforcement provider, plus a separately deployed inspecting proxy when HTTPS method or path filtering is requested. Cilium alone does not establish the complete inspection workflow.
+- A qualified isolation runtime such as gVisor or Kata. Ordinary containers may be useful for development but are not equivalent to the supported agent isolation profile.
+- A Forgejo instance with qualified repository grants, credential revocation and branch protections, and an operator credential held outside project environments.
+- Persistent volume provisioning with a documented retention and deletion policy. Snapshot and backup cleanup must be specified separately.
+- Installation permissions for this controller's CRDs and RBAC, authenticated dashboard/API access, and a secure configuration path for control-plane credentials.
+
+The core design permits other qualified network and Git-host providers, but those are not supported merely because an interface exists. Publish exact supported versions and end-to-end qualification results before release. OpenRig, Orca, T3, OTel export and remote mirrors are optional.
+
 ## Portability and release
 
 Keep cluster addresses, storage classes, authentication settings and provider configuration outside reusable code. Do not copy private deployment secrets into this repository.
