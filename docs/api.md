@@ -37,6 +37,6 @@ Normal Kubernetes deletion triggers the cleanup finalizer. The dashboard uses th
 
 ## Extending providers
 
-`internal/forgejo.Host` defines discovery, grant and revocation. `internal/network.Provider` declares capabilities and produces enforcement objects. The inspecting proxy is a separate Go component with a policy document. Provider implementations must qualify their actual behavior before being advertised as supported.
+`internal/forgejo.Host` defines discovery, grant and revocation. `internal/network.Provider` declares capabilities, produces enforcement objects and supplies pod DNS settings that agree with its DNS enforcement. The inspecting proxy is a separate Go component with a policy document. Provider implementations must qualify their actual behavior before being advertised as supported.
 
 The first implementation uses an operator-selected worker image as its environment template. It does not yet expose multiple named templates or an agent-orchestrator adapter API. SSH, Orca and OpenRig integration are future additions to the prepared environment, not current tested features.

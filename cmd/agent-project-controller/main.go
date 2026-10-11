@@ -34,6 +34,9 @@ func env(k, fallback string) string {
 	}
 	return v
 }
+func profile(prefix string) controller.ResourceProfile {
+	return controller.ResourceProfile{CPURequest: os.Getenv(prefix + "_CPU_REQUEST"), MemoryRequest: os.Getenv(prefix + "_MEMORY_REQUEST"), CPULimit: os.Getenv(prefix + "_CPU_LIMIT"), MemoryLimit: os.Getenv(prefix + "_MEMORY_LIMIT")}
+}
 func secret(k string) (string, error) {
 	p := os.Getenv(k)
 	if p == "" {
@@ -100,7 +103,7 @@ func run(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	reconciler := &controller.Reconciler{Client: direct, Host: host, Network: network.Cilium{ClusterDomain: env("CLUSTER_DOMAIN", "cluster.local")}, Config: controller.Config{Namespace: ns, ForgejoOrigin: host.Origin, Owner: host.Owner, Image: os.Getenv("WORKSPACE_IMAGE"), RuntimeClass: os.Getenv("RUNTIME_CLASS"), StorageClass: os.Getenv("STORAGE_CLASS"), StorageSize: env("STORAGE_SIZE", "10Gi")}}
+	reconciler := &controller.Reconciler{Client: direct, Host: host, Network: network.Cilium{ClusterDomain: env("CLUSTER_DOMAIN", "cluster.local"), DNSNamespace: env("DNS_SERVICE_NAMESPACE", "kube-system"), DNSService: env("DNS_SERVICE_NAME", "kube-dns")}, Config: controller.Config{Namespace: ns, ForgejoOrigin: host.Origin, Owner: host.Owner, Image: os.Getenv("WORKSPACE_IMAGE"), RuntimeClass: os.Getenv("RUNTIME_CLASS"), StorageClass: os.Getenv("STORAGE_CLASS"), StorageSize: env("STORAGE_SIZE", "10Gi"), WorkerResources: profile("WORKSPACE"), ProxyResources: profile("PROXY")}}
 	if e = reconciler.Config.Validate(); e != nil {
 		return e
 	}

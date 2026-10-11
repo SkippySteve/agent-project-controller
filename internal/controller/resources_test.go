@@ -1,0 +1,29 @@
+package controller
+
+import "testing"
+
+func TestResourceProfiles(t *testing.T) {
+	worker, proxy, e := (Config{}).resources()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if worker.Limits.Memory().String() != "4Gi" || proxy.Limits.Memory().String() != "512Mi" {
+		t.Fatal("workspace and proxy defaults should differ")
+	}
+	c := Config{WorkerResources: ResourceProfile{CPURequest: "750m", MemoryRequest: "1Gi", CPULimit: "2", MemoryLimit: "8Gi"}}
+	worker, proxy, e = c.resources()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if worker.Requests.Cpu().String() != "750m" || worker.Limits.Memory().String() != "8Gi" || proxy.Limits.Memory().String() != "512Mi" {
+		t.Fatal("operator sizing not honored independently")
+	}
+	for _, p := range []ResourceProfile{{CPURequest: "garbage"}, {MemoryRequest: "0"}, {CPULimit: "-1"}, {CPURequest: "5"}, {MemoryRequest: "8Gi"}, {MemoryLimit: "0"}} {
+		if _, _, e = (Config{WorkerResources: p}).resources(); e == nil {
+			t.Fatal("invalid workspace sizing accepted", p)
+		}
+		if _, _, e = (Config{ProxyResources: p}).resources(); e == nil {
+			t.Fatal("invalid proxy sizing accepted", p)
+		}
+	}
+}

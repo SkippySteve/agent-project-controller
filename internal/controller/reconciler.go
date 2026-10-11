@@ -44,14 +44,18 @@ var sandboxGVK = schema.GroupVersionKind{Group: "agents.x-k8s.io", Version: "v1b
 type Config struct {
 	Namespace, ForgejoOrigin, Owner, Image, RuntimeClass, StorageClass string
 	StorageSize                                                        string
+	WorkerResources, ProxyResources                                    ResourceProfile
 }
 
 func (c Config) Validate() error {
 	if c.Namespace == "" || c.Owner == "" || c.RuntimeClass == "" || c.StorageClass == "" {
 		return errors.New("control namespace, repository owner, runtime class and storage class required")
 	}
-	if _, e := resource.ParseQuantity(c.StorageSize); e != nil {
+	if q, e := resource.ParseQuantity(c.StorageSize); e != nil || q.Sign() <= 0 {
 		return errors.New("invalid storage size")
+	}
+	if _, _, e := c.resources(); e != nil {
+		return e
 	}
 	digest := strings.Split(c.Image, "@sha256:")
 	if len(digest) != 2 || digest[0] == "" || len(digest[1]) != 64 {
@@ -210,6 +214,9 @@ func owner(w *api.ProjectWorkspace, obj client.Object) error {
 	return nil
 }
 func (r *Reconciler) validate(ctx context.Context, w *api.ProjectWorkspace) error {
+	if e := r.Config.Validate(); e != nil {
+		return e
+	}
 	if w.UID == "" {
 		return errors.New("workspace UID missing")
 	}
@@ -392,6 +399,12 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 		want, _, _ := unstructured.NestedMap(expected.Object, "spec")
 		got, _, _ := unstructured.NestedMap(current.Object, "spec")
 		if expected.GetKind() == "Sandbox" {
+			pod, _, _ := unstructured.NestedMap(got, "podTemplate", "spec")
+			var spec corev1.PodSpec
+			encoded, e := json.Marshal(pod)
+			if e != nil || json.Unmarshal(encoded, &spec) != nil || !safePod(spec) {
+				return errors.New("unsafe Sandbox pod configuration drift detected")
+			}
 			got["operatingMode"] = want["operatingMode"]
 			if !contains(got, want) {
 				return errors.New("Sandbox configuration drift detected")
@@ -400,7 +413,7 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 			_ = unstructured.SetNestedField(current.Object, want["operatingMode"], "spec", "operatingMode")
 			return r.Patch(ctx, current, client.MergeFrom(old))
 		}
-		if !contains(got, want) {
+		if !same(got, want) {
 			return errors.New("network policy drift detected")
 		}
 	case *corev1.Secret:
@@ -415,7 +428,7 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 			return errors.New("project configuration drift detected")
 		}
 	case *appsv1.Deployment:
-		if !contains(existing.(*appsv1.Deployment).Spec, expected.Spec) {
+		if !safePod(existing.(*appsv1.Deployment).Spec.Template.Spec) || !contains(existing.(*appsv1.Deployment).Spec, expected.Spec) {
 			return errors.New("proxy deployment drift detected")
 		}
 	case *corev1.ServiceAccount:
@@ -602,6 +615,28 @@ func contains(got, want any) bool {
 	norm := func(v any) any { b, _ := json.Marshal(v); var o any; _ = json.Unmarshal(b, &o); return o }
 	return subset(norm(got), norm(want))
 }
+func same(got, want any) bool {
+	return contains(got, want) && contains(want, got)
+}
+func safePod(p corev1.PodSpec) bool {
+	if p.HostNetwork || p.HostPID || p.HostIPC || len(p.EphemeralContainers) != 0 || p.ShareProcessNamespace != nil && *p.ShareProcessNamespace {
+		return false
+	}
+	if p.SecurityContext != nil && len(p.SecurityContext.Sysctls) != 0 {
+		return false
+	}
+	containers := append(append([]corev1.Container{}, p.InitContainers...), p.Containers...)
+	for _, c := range containers {
+		if c.SecurityContext == nil {
+			return false
+		}
+		s := c.SecurityContext
+		if s.Capabilities != nil && len(s.Capabilities.Add) != 0 || s.ProcMount != nil && *s.ProcMount != corev1.DefaultProcMount {
+			return false
+		}
+	}
+	return true
+}
 func subset(got, want any) bool {
 	switch w := want.(type) {
 	case map[string]any:
@@ -632,6 +667,14 @@ func subset(got, want any) bool {
 }
 func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *corev1.Secret) error {
 	ns := namespace(w)
+	workerResources, proxyResources, e := r.Config.resources()
+	if e != nil {
+		return e
+	}
+	dns, e := r.Network.DNS(ctx, r.Client, ns)
+	if e != nil {
+		return e
+	}
 	rule, e := proxy.ForgejoRule(r.Config.ForgejoOrigin, w.Spec.Repository)
 	if e != nil {
 		return e
@@ -657,17 +700,16 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 		&corev1.PersistentVolumeClaim{ObjectMeta: metadata(w, "workspace"), Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &r.Config.StorageClass, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(r.Config.StorageSize)}}}},
 		&corev1.Service{ObjectMeta: metadata(w, "proxy"), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: map[string]string{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": "proxy"}, Ports: []corev1.ServicePort{{Port: 3128, TargetPort: fromInt(3128), Protocol: corev1.ProtocolTCP}}}})
 	security := &corev1.SecurityContext{Privileged: boolp(false), RunAsNonRoot: boolp(true), RunAsUser: int64p(1000), RunAsGroup: int64p(1000), AllowPrivilegeEscalation: boolp(false), ReadOnlyRootFilesystem: boolp(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
-	resources := corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")}}
 	plabels := labels(w)
 	plabels["projects.agentwork.dev/role"] = "proxy"
-	proxyDeployment := &appsv1.Deployment{ObjectMeta: metadata(w, "proxy"), Spec: appsv1.DeploymentSpec{Replicas: int32p(1), Selector: &metav1.LabelSelector{MatchLabels: plabels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: plabels}, Spec: corev1.PodSpec{AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(1), SecurityContext: &corev1.PodSecurityContext{FSGroup: int64p(1000)}, Containers: []corev1.Container{{Name: "proxy", Image: r.Config.Image, Args: []string{"proxy"}, SecurityContext: security, Resources: resources, Ports: []corev1.ContainerPort{{ContainerPort: 3128}}, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: fromInt(3128)}}}, VolumeMounts: []corev1.VolumeMount{{Name: "tls", MountPath: "/tls", ReadOnly: true}, {Name: "policy", MountPath: "/policy", ReadOnly: true}}}}, Volumes: []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "proxy-ca", DefaultMode: int32p(0440)}}}, {Name: "policy", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "proxy-policy"}}}}}}}}}
+	proxyDeployment := &appsv1.Deployment{ObjectMeta: metadata(w, "proxy"), Spec: appsv1.DeploymentSpec{Replicas: int32p(1), Selector: &metav1.LabelSelector{MatchLabels: plabels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: plabels}, Spec: corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(1), SecurityContext: &corev1.PodSecurityContext{FSGroup: int64p(1000)}, Containers: []corev1.Container{{Name: "proxy", Image: r.Config.Image, Args: []string{"proxy"}, SecurityContext: security, Resources: proxyResources, Ports: []corev1.ContainerPort{{ContainerPort: 3128}}, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: fromInt(3128)}}}, VolumeMounts: []corev1.VolumeMount{{Name: "tls", MountPath: "/tls", ReadOnly: true}, {Name: "policy", MountPath: "/policy", ReadOnly: true}}}}, Volumes: []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "proxy-ca", DefaultMode: int32p(0440)}}}, {Name: "policy", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "proxy-policy"}}}}}}}}}
 	objects = append(objects, proxyDeployment)
 	u, _ := url.Parse(r.Config.ForgejoOrigin)
 	env := []corev1.EnvVar{{Name: "HOME", Value: "/workspace/home"}, {Name: "GIT_ORIGIN", Value: r.Config.ForgejoOrigin}, {Name: "GIT_HOST", Value: u.Host}, {Name: "GIT_REPOSITORY", Value: w.Spec.Repository}, {Name: "GIT_WORK_BRANCH", Value: "agent/" + identity(w)}, {Name: "GIT_TERMINAL_PROMPT", Value: "0"}, {Name: "HTTPS_PROXY", Value: "http://proxy:3128"}, {Name: "https_proxy", Value: "http://proxy:3128"}, {Name: "HTTP_PROXY", Value: "http://proxy:3128"}, {Name: "http_proxy", Value: "http://proxy:3128"}, {Name: "SSL_CERT_FILE", Value: "/workspace/home/ca-bundle.crt"}, {Name: "NODE_EXTRA_CA_CERTS", Value: "/trust/ca.crt"}, {Name: "REQUESTS_CA_BUNDLE", Value: "/workspace/home/ca-bundle.crt"}}
 	mounts := []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}, {Name: "identity", MountPath: "/identity", ReadOnly: true}, {Name: "trust", MountPath: "/trust", ReadOnly: true}, {Name: "scratch", MountPath: "/tmp"}}
 	workerlabels := labels(w)
 	workerlabels["projects.agentwork.dev/role"] = "worker"
-	spec := corev1.PodSpec{RuntimeClassName: &r.Config.RuntimeClass, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(5), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolp(true), RunAsUser: int64p(1000), RunAsGroup: int64p(1000), FSGroup: int64p(1000)}, InitContainers: []corev1.Container{{Name: "clone", Image: r.Config.Image, Args: []string{"bootstrap"}, Env: env, SecurityContext: security, Resources: resources, VolumeMounts: mounts}}, Containers: []corev1.Container{{Name: "workspace", Image: r.Config.Image, Command: []string{"/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"}, Env: env, WorkingDir: "/workspace/repo", SecurityContext: security, Resources: resources, VolumeMounts: mounts, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"test", "-f", "/workspace/.ready"}}}}}}, Volumes: []corev1.Volume{{Name: "workspace", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "workspace"}}}, {Name: "identity", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "git-identity", DefaultMode: int32p(0440)}}}, {Name: "trust", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "trust"}}}}, {Name: "scratch", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}}
+	spec := corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, RuntimeClassName: &r.Config.RuntimeClass, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(5), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolp(true), RunAsUser: int64p(1000), RunAsGroup: int64p(1000), FSGroup: int64p(1000)}, InitContainers: []corev1.Container{{Name: "clone", Image: r.Config.Image, Args: []string{"bootstrap"}, Env: env, SecurityContext: security, Resources: workerResources, VolumeMounts: mounts}}, Containers: []corev1.Container{{Name: "workspace", Image: r.Config.Image, Command: []string{"/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"}, Env: env, WorkingDir: "/workspace/repo", SecurityContext: security, Resources: workerResources, VolumeMounts: mounts, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"test", "-f", "/workspace/.ready"}}}}}}, Volumes: []corev1.Volume{{Name: "workspace", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "workspace"}}}, {Name: "identity", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "git-identity", DefaultMode: int32p(0440)}}}, {Name: "trust", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "trust"}}}}, {Name: "scratch", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}}
 	b, e := json.Marshal(spec)
 	if e != nil {
 		return e

@@ -42,6 +42,9 @@ func (h *host) Revoke(context.Context, string, forgejo.Credentials) error {
 type provider struct{ network.Cilium }
 
 func (provider) Check(context.Context, client.Client) error { return nil }
+func (provider) DNS(context.Context, client.Client, string) (*corev1.PodDNSConfig, error) {
+	return &corev1.PodDNSConfig{Nameservers: []string{"10.96.0.10"}}, nil
+}
 func fixture(t *testing.T) (*Reconciler, *api.ProjectWorkspace, *host) {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -162,5 +165,133 @@ func TestRetainStorageRejectedBeforeGrant(t *testing.T) {
 	}
 	if h.grantCalls != 0 {
 		t.Fatal("access granted before validating storage")
+	}
+}
+
+func TestRemovalRevokesDespiteLocalOwnershipDrift(t *testing.T) {
+	ctx := context.Background()
+	r, w, h := fixture(t)
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(sandboxGVK)
+	key := types.NamespacedName{Namespace: namespace(w), Name: "project"}
+	if e := r.Get(ctx, key, u); e != nil {
+		t.Fatal(e)
+	}
+	u.SetLabels(map[string]string{api.OwnerLabel: "someone-else"})
+	if e := r.Update(ctx, u); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.remove(ctx, w); e == nil {
+		t.Fatal("ownership drift allowed cleanup completion")
+	}
+	if h.revokeCalls != 1 {
+		t.Fatal("local drift blocked external revocation")
+	}
+	if e := r.Get(ctx, key, u); e != nil {
+		t.Fatal("unowned Sandbox deleted")
+	}
+}
+
+func TestMissingLedgerAfterPriorGenerationGrantBlocksRemoval(t *testing.T) {
+	ctx := context.Background()
+	r, w, _ := fixture(t)
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	s := &corev1.Secret{}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: "control", Name: identity(w)}, s); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Delete(ctx, s); e != nil {
+		t.Fatal(e)
+	}
+	w.Generation = 3
+	if e := r.remove(ctx, w); e == nil {
+		t.Fatal("missing prior-generation ledger accepted")
+	}
+	var ns corev1.Namespace
+	if e := r.Get(ctx, types.NamespacedName{Name: namespace(w)}, &ns); e != nil {
+		t.Fatal("storage deleted without verified revocation")
+	}
+}
+
+func TestAddedNetworkPermissionRejected(t *testing.T) {
+	ctx := context.Background()
+	r, w, _ := fixture(t)
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "cilium.io", Version: "v2", Kind: "CiliumNetworkPolicy"})
+	if e := r.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "worker"}, u); e != nil {
+		t.Fatal(e)
+	}
+	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "egress")
+	rules[1].(map[string]any)["toEntities"] = []any{"world"}
+	_ = unstructured.SetNestedSlice(u.Object, rules, "spec", "egress")
+	if e := r.Update(ctx, u); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.ensure(ctx, w); e == nil {
+		t.Fatal("added network permission accepted")
+	}
+}
+
+func TestAddedPodPrivilegesRejected(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*corev1.PodSpec)
+	}{
+		{"host-network", func(p *corev1.PodSpec) { p.HostNetwork = true }},
+		{"host-pid", func(p *corev1.PodSpec) { p.HostPID = true }},
+		{"host-ipc", func(p *corev1.PodSpec) { p.HostIPC = true }},
+		{"capability", func(p *corev1.PodSpec) {
+			p.Containers[0].SecurityContext.Capabilities.Add = []corev1.Capability{"NET_ADMIN"}
+		}},
+		{"unmasked-proc", func(p *corev1.PodSpec) { v := corev1.UnmaskedProcMount; p.Containers[0].SecurityContext.ProcMount = &v }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			r, w, _ := fixture(t)
+			if e := r.ensure(ctx, w); e != nil {
+				t.Fatal(e)
+			}
+			var deployment appsv1.Deployment
+			if e := r.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "proxy"}, &deployment); e != nil {
+				t.Fatal(e)
+			}
+			test.change(&deployment.Spec.Template.Spec)
+			if e := r.Update(ctx, &deployment); e != nil {
+				t.Fatal(e)
+			}
+			if e := r.ensure(ctx, w); e == nil {
+				t.Fatal("added proxy privilege accepted")
+			}
+		})
+	}
+}
+
+func TestAddedSandboxHostNetworkingRejected(t *testing.T) {
+	ctx := context.Background()
+	r, w, _ := fixture(t)
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(sandboxGVK)
+	if e := r.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "project"}, u); e != nil {
+		t.Fatal(e)
+	}
+	if e := unstructured.SetNestedField(u.Object, true, "spec", "podTemplate", "spec", "hostNetwork"); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Update(ctx, u); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.ensure(ctx, w); e == nil {
+		t.Fatal("Sandbox gained host network access")
 	}
 }

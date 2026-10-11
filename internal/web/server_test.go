@@ -55,3 +55,22 @@ func TestAuthenticationCSRFAndCreation(t *testing.T) {
 		}
 	}
 }
+
+func TestOIDCDoesNotEnableEmptyStaticPassword(t *testing.T) {
+	s := &Server{OIDC: &OIDC{}, Origin: "https://projects.example.com", AllowBasic: true}
+	if _, e := s.Handler(); e == nil {
+		t.Fatal("OIDC allowed an explicitly enabled static login with no secret")
+	}
+	s.AllowBasic = false
+	h, e := s.Handler()
+	if e != nil {
+		t.Fatal(e)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/repositories", nil)
+	req.SetBasicAuth("operator", "")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatal("empty password bypassed OIDC")
+	}
+}

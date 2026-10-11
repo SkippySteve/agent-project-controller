@@ -18,6 +18,16 @@ configMapGenerator:
       - STORAGE_CLASS=local-path
       - STORAGE_SIZE=10Gi
       - CLUSTER_DOMAIN=cluster.local
+      - DNS_SERVICE_NAMESPACE=kube-system
+      - DNS_SERVICE_NAME=kube-dns
+      - WORKSPACE_CPU_REQUEST=500m
+      - WORKSPACE_MEMORY_REQUEST=512Mi
+      - WORKSPACE_CPU_LIMIT=4
+      - WORKSPACE_MEMORY_LIMIT=4Gi
+      - PROXY_CPU_REQUEST=100m
+      - PROXY_MEMORY_REQUEST=128Mi
+      - PROXY_CPU_LIMIT=1
+      - PROXY_MEMORY_LIMIT=512Mi
       - PUBLIC_ORIGIN=https://projects.example.com
       - OIDC_ISSUER=https://identity.example.com/realms/agents
       - OIDC_CLIENT_ID=agent-project-controller

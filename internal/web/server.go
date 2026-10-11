@@ -49,7 +49,7 @@ func equal(a, b string) bool {
 }
 func (s *Server) Handler() (http.Handler, error) {
 	u, e := url.Parse(s.Origin)
-	if e != nil || u.Host == "" || (u.Scheme != "https" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || s.Password != "" && len(s.Password) < 32 || s.OIDC == nil && !s.AllowBasic || s.OIDC == nil && len(s.Password) < 32 {
+	if e != nil || u.Host == "" || (u.Scheme != "https" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || s.Password != "" && len(s.Password) < 32 || s.AllowBasic && len(s.Password) < 32 || s.OIDC == nil && !s.AllowBasic {
 		return nil, errors.New("dashboard requires an explicit HTTPS origin and OIDC or explicitly enabled static authentication")
 	}
 	mux := http.NewServeMux()
@@ -108,7 +108,7 @@ func (s *Server) Handler() (http.Handler, error) {
 		}
 		bearer := s.Password != "" && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") && equal(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), s.Password)
 		user, pass, basic := r.BasicAuth()
-		basic = s.AllowBasic && basic && user == "operator" && equal(pass, s.Password)
+		basic = s.AllowBasic && s.Password != "" && basic && user == "operator" && equal(pass, s.Password)
 		subject := ""
 		session := false
 		if s.OIDC != nil {

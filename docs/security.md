@@ -24,6 +24,8 @@ Agents can perform operations supported by their Forgejo repository write permis
 
 Cilium restricts workers to their proxy and necessary DNS resolution. The proxy allows exact configured hosts, HTTP methods and literal path prefixes. DNS policy permits necessary exact names rather than arbitrary queries. Upstream TLS certificates are verified normally. Private upstream addresses are prohibited except for the operator-configured Forgejo host.
 
+Project pods use an explicit CoreDNS service rather than inheriting the node-local resolver. This keeps their resolver selection consistent with endpoint-scoped DNS policy. Node-local interception and service routing still require dataplane qualification. The controller rejects unsupported resolver settings and does not grant unrestricted host DNS access.
+
 The current implementation supports CONNECT on port 443 and inspected HTTP/1.1. It rejects escaped paths, alternate authorities, protocol upgrades and requests larger than 128 MiB. WebSocket, HTTP/2-only and certificate-pinned clients are not supported. There is no opaque tunnel fallback. This conservative path handling may require explicit compatibility work for some clients.
 
 Request bodies are forwarded, not classified or filtered. Allowed API requests, Git pushes and other permitted writes can carry source code or secrets. HTTPS filtering does not provide a source-code confidentiality guarantee. Telemetry endpoints are also possible outbound data channels.

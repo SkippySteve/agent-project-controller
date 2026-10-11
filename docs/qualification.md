@@ -7,7 +7,7 @@ make test vet build
 kubectl kustomize config/deploy > rendered.yaml
 ```
 
-The test suite checks inspected TLS host/method/path denial, unsafe destination addresses, controller recovery, removal failure, retained volumes, ownership refusal, browser CSRF and OIDC verification. Default unit runs skip tests that need external binaries explicitly.
+The test suite checks inspected TLS host/method/path denial, unsafe destination addresses, controller recovery, removal failure, retained volumes, ownership refusal, added network/pod privileges, browser CSRF and OIDC verification. Bootstrap tests use real Git with disposable local repositories to verify staging recovery, branch selection, remote fetch and preservation of local edits. Git is required. Tests needing Kubernetes API-server binaries, a Forgejo server or Chromium require explicit configuration.
 
 To test CRD transition rules and resource retries against a local API server:
 
@@ -17,7 +17,7 @@ export KUBEBUILDER_ASSETS="$(setup-envtest use 1.34.1 -p path)"
 go test -race -count=1 ./...
 ```
 
-The controller API test uses minimal stand-in Sandbox/Cilium CRDs. It exercises native Kubernetes object validation and defaulting but does not start upstream controllers, schedule workloads, enforce Cilium policy or erase storage. Those require the cluster qualification below.
+The controller API test uses the unmodified upstream Agent Sandbox v1.0.4 CRD, with provenance and checksum in `internal/controller/testdata`. It verifies that the schema retains isolation, DNS, resource and readiness fields, and accepts suspend/retry operations. The Cilium CRD is still a minimal stand-in. The test exercises Kubernetes API validation and defaulting but does not start upstream controllers, schedule workloads, enforce Cilium policy or erase storage. Those require the cluster qualification below.
 
 Download and verify a Forgejo 15.0.9 binary using its official release instructions. Set its path and run:
 
@@ -44,7 +44,7 @@ This uses the real Go HTTP handler with a fake Kubernetes client. It checks proj
 Use disposable namespaces and repositories. Do not remove or replace an existing broker until these checks pass.
 
 1. Verify the selected runtime actually provides isolation, all workloads are non-root and workers cannot access Kubernetes API credentials or inspection private keys.
-2. Open a private repository from the dashboard. Confirm cloning, branch selection, safe fetch on resume and project readiness. Verify direct Forgejo HTTPS, another namespace's proxy, arbitrary DNS queries, IP-literal connections, QUIC and unapproved TLS destinations fail.
+2. Open a private repository from the dashboard. Confirm cloning, branch selection, safe fetch on resume and project readiness. Confirm `/etc/resolv.conf` uses the configured CoreDNS service and its traffic reaches managed CoreDNS endpoints, including in a cluster running node-local DNS. Verify direct Forgejo HTTPS, another namespace's proxy, arbitrary DNS queries, direct node-local DNS, IP-literal connections, QUIC and unapproved TLS destinations fail.
 3. Prove inspected methods and paths with the actual clients, including their redirects and TLS trust. Unsupported clients must stay blocked.
 4. Verify main and any additional protected references reject Git and API mutations by project identities. Confirm approved human PR review and merge still work.
 5. Revoke while Git traffic is active. Confirm credentials become unusable, project processes and proxy sessions stop, the namespace disappears and the backing data is deleted by the provisioner.

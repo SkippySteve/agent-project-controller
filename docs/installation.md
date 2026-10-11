@@ -6,7 +6,7 @@ Deploy first in a disposable qualification cluster. This initial implementation 
 
 - Kubernetes. Local API-server tests use 1.34.1. Exact supported cluster versions depend on the qualified upstream Agent Sandbox and Cilium releases.
 - Upstream Agent Sandbox with the `agents.x-k8s.io/v1beta1` Sandbox API. The adapter targets v1.0.4 operating modes. Templates, claims and pools are unnecessary.
-- Cilium with DNS/FQDN policy enforcement enabled, CoreDNS using the `k8s-app=kube-dns` label, and a standard cluster DNS domain. The current adapter does not support node-local DNS. No cluster-wide rule may broaden project egress around the inspection proxy.
+- Cilium with DNS/FQDN policy enforcement enabled and CoreDNS using the `k8s-app=kube-dns` label. Project pods explicitly use a configured CoreDNS ClusterIP service, not the node's default resolver. No cluster-wide rule may broaden project egress around the inspection proxy.
 - A qualified gVisor or Kata RuntimeClass. Checking that the resource exists does not prove runtime isolation.
 - Forgejo. The local Git/API qualification uses 15.0.9. Repository-scoped personal access tokens and protected `main` are required. Git over HTTPS on port 443 must use a server certificate trusted by the container.
 - A storage class and provisioner with `Delete` reclaim behavior. The controller checks both the class and bound volume. The provisioner must actually delete its backing data. Snapshots and backups need a separate operator retention policy.
@@ -24,6 +24,14 @@ docker push registry.example.com/agent-project-controller:dev
 ```
 
 Prepare a Kustomize overlay over `config/deploy`. Set the controller Deployment image and `WORKSPACE_IMAGE` to the built digest. Replace example hosts, Forgejo owner, runtime class, storage class and OIDC settings. Set `CLUSTER_DOMAIN` if it differs from `cluster.local`. `WORKSPACE_IMAGE` is empty in the sample, so unconfigured installations fail rather than launching an arbitrary image.
+
+The controller discovers the address of `DNS_SERVICE_NAMESPACE` / `DNS_SERVICE_NAME`, default `kube-system` / `kube-dns`. The service must select CoreDNS pods labeled `k8s-app=kube-dns` and expose TCP and UDP port 53. Workers and proxies use `dnsPolicy: None`, that address and the configured cluster search domain. DNS policy still permits only the names required by each role. Invalid or missing resolver configuration blocks project grants.
+
+Clusters can keep node-local DNS for other workloads. For this profile, project DNS traffic must reach CoreDNS through Cilium's DNS enforcement. Some node-local configurations intercept the kube-dns service address or use local redirect policies. In those clusters, configure a separate ClusterIP service selecting CoreDNS and qualify its routing. Do not replace the endpoint restriction with unrestricted node/host DNS access. Explicit pod DNS configuration alone does not prove that interception is absent.
+
+Workspace resource defaults are a `500m` CPU and `512Mi` memory request with limits of `4` CPUs and `4Gi`. The clone init container uses the same profile. The HTTPS proxy has separate defaults of `100m` / `128Mi` requests and `1` CPU / `512Mi` limits. Configure these with `WORKSPACE_CPU_REQUEST`, `WORKSPACE_MEMORY_REQUEST`, `WORKSPACE_CPU_LIMIT`, `WORKSPACE_MEMORY_LIMIT` and the equivalent `PROXY_` variables. Values must be positive and requests must not exceed limits. Requests reserve scheduling capacity; limits bound use, so a memory-heavy build may still need a larger profile.
+
+Resource profiles and resolver settings are immutable for already provisioned environments. Configuration changes apply to new projects. Existing projects report configuration drift and remain suspended rather than silently changing their security settings. Remove and recreate them after saving local work when changing these settings.
 
 Create the control namespace, then supply a Secret named `controller-secrets` there. Use `--from-file` with protected files so credentials do not enter shell arguments or Git:
 
