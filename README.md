@@ -19,7 +19,7 @@ Agent Sandbox manages the sandbox workloads and supported lifecycle operations. 
 1. An authorized user selects a repository and requests a project environment.
 2. The controller grants repository access and provisions narrowly scoped credentials.
 3. It requests a Sandbox, prepares storage and clones the project.
-4. A dashboard or API client receives readiness. A Ready workspace is entered with `kubectl exec` into the `workspace` container, or with `agent-project-controller connect`.
+4. A dashboard or API client receives readiness. A Ready workspace is entered with `kubectl exec` into the `workspace` container, `agent-project-controller connect`, or `agent-project-controller exec <name> -- <command>`.
 5. Removal revokes credentials and repository grants, stops the environment, removes storage according to policy and verifies cleanup.
 
 Pause preserves project data. Removal has an explicit retention policy. A failed cleanup must remain visible and retryable; access revoked is not equivalent to data removed.

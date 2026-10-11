@@ -30,7 +30,7 @@ Automation can use an explicitly configured bearer secret. OIDC access tokens ar
 
 No creation request can select arbitrary container images, runtime classes, storage classes, secret mounts or Git origins. Operators configure those on the controller. Repository and HTTPS policy are immutable after creation.
 
-A Ready workspace is entered with `kubectl exec` into container `workspace`, or `agent-project-controller connect <name>`. The API does not open a tunnel.
+A Ready workspace is entered with `kubectl exec` into container `workspace`, `agent-project-controller connect <name>`, or `agent-project-controller exec <name> -- <command>`. The API does not open a tunnel.
 
 ## Custom resource
 
@@ -44,4 +44,4 @@ Normal Kubernetes deletion triggers the cleanup finalizer. The dashboard uses th
 
 `internal/forgejo.Host` defines discovery, grant and revocation. `internal/network.Provider` declares capabilities, produces enforcement objects and supplies pod DNS settings that agree with its DNS enforcement. The inspecting proxy is a separate Go component with a policy document. Provider implementations must qualify their actual behavior before being advertised as supported.
 
-The first implementation uses an operator-selected worker image as its environment template. It does not expose multiple named templates. SSH and OpenRig are not installed. A tool that can run `kubectl exec` can use a Ready workspace. That command is not an authenticated model session.
+The first implementation uses an operator-selected worker image as its environment template. It does not expose multiple named templates. SSH and OpenRig are not installed. A tool that can run `kubectl exec` can use a Ready workspace. That command is not an authenticated model session. Model access is an optional Secret named `model-access` in the project namespace, mounted read-only at `/run/model`. The controller rejects a refresh token in that Secret. Model hosts belong in the immutable HTTPS policy at creation.
