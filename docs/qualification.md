@@ -82,8 +82,16 @@ results qualify that specific compatibility choice, not other dataplanes.
 
 Local tests also exercise upstream Sandbox CRD defaults with a real API server,
 the Helm package, Git credential array fields, and nonblocking telemetry
-recording with an unavailable collector. Full interruption/outage acceptance,
-CA rotation, DNS endpoint recovery, authenticated model tasks, remote-tool
-integrations and external backup restore remain incomplete. The pilot did not
-retire an existing broker or enable unattended work. Deployment-specific pins
-and evidence remain in the operator's private infrastructure repository.
+recording with an unavailable collector. Controller tests cover a Forgejo grant
+outage that keeps the credential ledger, a revocation outage that suspends the
+workload and leaves removal pending, and a CoreDNS nameserver change that
+patches the Sandbox and proxy without deleting the volume or Git identity.
+
+On the pilot cluster, controller image `sha256:1adb1360640b9cff0b00488a2cc0f5365486ab7eb0e737b949ad563cbe8a10c1` was qualified against the existing workspace image `sha256:0a57a20dd09ceb7d7066fd070c29047fbe3921819013a8464e263fcf82c8cb66` and the existing proxy image `sha256:a5755c5db0849a117eee974b4bae4a7bee31cb3f1110de27a435d48215d21b0f`. `agent-project-controller preflight` passed there. A disposable `qualification-session` workspace cloned `steve/qualification-recovery`, mounted optional `model-access` at `/run/model`, and kept the Go registry hosts. Restarting the controller preserved the ledger and the volume. Deleting only the worker pod preserved a file on the volume and the Git identity. Replacing the Sandbox nameserver with the documentation address `192.0.2.10` while the controller was stopped, then starting it, restored the inspected CoreDNS address, restarted the worker, and kept the volume, Git identity and file. CoreDNS pods were not modified. Stopping the controller, deleting the ledger and requesting removal left the namespace in place with `credential ledger missing`. Restoring the ledger let removal finish. A second disposable workspace, `qualification-outage`, stayed in `Removing` with `Forgejo request failed` and its namespace intact while the controller's Forgejo origin was unreachable. Restoring the origin let removal finish. `scripts/qualify-recovery.py` repeats the restart, volume and ledger checks and refuses any workspace or repository that does not start with `qualification-`.
+
+CA rotation, authenticated model tasks and HTTP/2 inspection remain deferred.
+A Ready session is `kubectl exec` or `agent-project-controller connect`. That
+is not a qualified model login. The pilot did not retire an existing broker or
+enable unattended work. The mutable `:pilot` and `:recovery` tags are not
+release pins. Ledger loss still leaves removal incomplete on purpose, and
+removal does not delete snapshots.

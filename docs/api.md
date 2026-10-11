@@ -13,7 +13,7 @@ Automation can use an explicitly configured bearer secret. OIDC access tokens ar
 - `GET /api/v1/session` reports authentication mode and caller identity.
 - `GET /api/v1/repositories` discovers repositories under the configured Forgejo owner.
 - `GET /api/v1/workspaces` returns requests and observed status in the control namespace.
-- `POST /api/v1/workspaces` creates a request with `name`, `repository` and optional `https` rules. Names are lowercase DNS labels up to 40 characters.
+- `POST /api/v1/workspaces` creates a request with `name`, `repository`, optional `registries` (`go`, `npm`, `python`, `rust`) and optional `https` rules. Names are lowercase DNS labels up to 40 characters. An unknown or repeated registry, or a host listed twice, returns 400.
 - `PATCH /api/v1/workspaces/{name}` sets `desiredState` to `Running`, `Paused` or `Removed`. Include the current `resourceVersion`; a stale request returns 409.
 - `GET /api/v1/workspaces/{name}/audit` returns persisted lifecycle records.
 
@@ -21,11 +21,16 @@ Automation can use an explicitly configured bearer secret. OIDC access tokens ar
 {
   "name": "example",
   "repository": "operator/example",
-  "https": [{"host": "proxy.golang.org", "methods": ["GET", "HEAD"], "paths": ["/"]}]
+  "registries": ["go"],
+  "https": [{"host": "example.com", "methods": ["GET", "HEAD"], "paths": ["/"]}]
 }
 ```
 
+`registries` expands to the reviewed hosts before the custom resource is stored. `go` becomes GET and HEAD for `proxy.golang.org` and `sum.golang.org`, each with path `/`. The stored `https` list is the expanded registry rules followed by the explicit rules. Path `/` allows the whole host. It does not approve package versions.
+
 No creation request can select arbitrary container images, runtime classes, storage classes, secret mounts or Git origins. Operators configure those on the controller. Repository and HTTPS policy are immutable after creation.
+
+A Ready workspace is entered with `kubectl exec` into container `workspace`, or `agent-project-controller connect <name>`. The API does not open a tunnel.
 
 ## Custom resource
 
@@ -39,4 +44,4 @@ Normal Kubernetes deletion triggers the cleanup finalizer. The dashboard uses th
 
 `internal/forgejo.Host` defines discovery, grant and revocation. `internal/network.Provider` declares capabilities, produces enforcement objects and supplies pod DNS settings that agree with its DNS enforcement. The inspecting proxy is a separate Go component with a policy document. Provider implementations must qualify their actual behavior before being advertised as supported.
 
-The first implementation uses an operator-selected worker image as its environment template. It does not yet expose multiple named templates or an agent-orchestrator adapter API. SSH, Orca and OpenRig integration are future additions to the prepared environment, not current tested features.
+The first implementation uses an operator-selected worker image as its environment template. It does not expose multiple named templates. SSH and OpenRig are not installed. A tool that can run `kubectl exec` can use a Ready workspace. That command is not an authenticated model session.

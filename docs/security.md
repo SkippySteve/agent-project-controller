@@ -48,4 +48,4 @@ Volume and namespace deletion are infrastructure checks, not proof of physical s
 
 ## Reporting a vulnerability
 
-Until a public security reporting channel is configured, contact the repository owner privately. Do not include credentials or exploitable details in a public issue. A public release must document a stable reporting address.
+Report a vulnerability privately to steve@aimingupward.com. Do not include credentials, tokens or a proof-of-concept exploit in a public issue. The same contact is in the repository `SECURITY.md`. GitHub private vulnerability reporting applies when this commit is mirrored there. The Git mirror does not carry Forgejo issues or pull requests.

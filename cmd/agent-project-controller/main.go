@@ -14,9 +14,11 @@ import (
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/bootstrap"
+	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/connect"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/controller"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/forgejo"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/network"
+	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/preflight"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/proxy"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/telemetry"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/web"
@@ -59,6 +61,13 @@ func run(ctx context.Context) error {
 			return bootstrap.Credential()
 		case "proxy":
 			return proxy.Run(ctx)
+		case "preflight":
+			return preflight.Run(ctx)
+		case "connect":
+			if len(os.Args) != 3 {
+				return errors.New("usage: agent-project-controller connect <workspace>")
+			}
+			return connectCLI(ctx, os.Args[2])
 		case "controller":
 		default:
 			return errors.New("unknown command")
@@ -168,6 +177,21 @@ func run(ctx context.Context) error {
 	defer cancel()
 	_ = httpServer.Shutdown(c)
 	return e
+}
+func connectCLI(ctx context.Context, workspace string) error {
+	config := ctrl.GetConfigOrDie()
+	scheme := runtime.NewScheme()
+	if e := clientgoscheme.AddToScheme(scheme); e != nil {
+		return e
+	}
+	if e := api.AddToScheme(scheme); e != nil {
+		return e
+	}
+	c, e := client.New(config, client.Options{Scheme: scheme})
+	if e != nil {
+		return e
+	}
+	return connect.Run(ctx, c, config, env("CONTROL_NAMESPACE", "agent-project-controller"), workspace)
 }
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))

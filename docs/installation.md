@@ -4,15 +4,16 @@ Deploy first in a disposable qualification cluster. This initial implementation 
 
 ## Prerequisites
 
-- Kubernetes. Local API-server tests use 1.34.1. Exact supported cluster versions depend on the qualified upstream Agent Sandbox and Cilium releases.
-- Upstream Agent Sandbox with the `agents.x-k8s.io/v1beta1` Sandbox API. The adapter targets v1.0.4 operating modes. Templates, claims and pools are unnecessary.
-- Cilium with DNS/FQDN policy enforcement enabled and CoreDNS using the `k8s-app=kube-dns` label. Project pods explicitly use a configured CoreDNS ClusterIP service, not the node's default resolver. No cluster-wide rule may broaden project egress around the inspection proxy.
-- A qualified gVisor or Kata RuntimeClass. Checking that the resource exists does not prove runtime isolation.
-- Forgejo. The local Git/API qualification uses 15.0.9. Repository-scoped personal access tokens and protected `main` are required. Git over HTTPS on port 443 must use a server certificate trusted by the container.
+- Kubernetes 1.36.2 is the qualified cluster. Local API-server tests use 1.34.1. Other versions need the same qualification.
+- Upstream Agent Sandbox 1.0.4 with the `agents.x-k8s.io/v1beta1` Sandbox API. Templates, claims and pools are unnecessary.
+- Cilium 1.19.5 with DNS/FQDN policy enforcement enabled and CoreDNS using the `k8s-app=kube-dns` label. Project pods use explicit CoreDNS addresses, not the node's default resolver. No cluster-wide rule may broaden project egress around the inspection proxy. The qualified gVisor profile sets `DNS_DIRECT_ENDPOINTS=true`.
+- The qualified isolation runtime is gVisor, via a RuntimeClass such as `agent-gvisor`. Checking that the resource exists does not prove runtime isolation. Kata is not part of this qualification.
+- Forgejo 15.0.9. Repository-scoped personal access tokens and protected `main` are required. Git over HTTPS on port 443 must use a server certificate trusted by the container. The qualified identity provider is Authentik 2026.5.6.
+- One Forgejo owner, one operator group and one controller replica. This is not a multi-tenant hosted service.
 - A storage class and provisioner with `Delete` reclaim behavior. The controller checks both the class and bound volume. The provisioner must actually delete its backing data. Snapshots and backups need a separate operator retention policy.
 - An HTTPS dashboard origin and OIDC provider. Register a confidential client with the exact redirect URI `<PUBLIC_ORIGIN>/auth/callback`. Request group claims or explicitly allow issuer-local subject IDs.
 
-This release manages one configured Forgejo owner and one operator trust boundary. It is not a multi-tenant hosted service. Approved operators can manage all projects under that owner.
+Approved operators share one trust boundary and can manage every project under that owner.
 
 ## Build and configure
 
@@ -58,13 +59,32 @@ Expose the ClusterIP Service through your existing TLS reverse proxy. Do not exp
 
 Render your overlay, inspect its RBAC and apply it to the qualification cluster. The controller has cross-namespace resource permissions to provision projects, so its credential and service account must be treated as privileged infrastructure.
 
+Before trusting a cluster, run `agent-project-controller preflight` with the same `RUNTIME_CLASS`, `STORAGE_CLASS`, DNS and `PROXY_GATEWAY_JSON` settings the controller will use. It checks the Agent Sandbox CRD, Cilium and CoreDNS, the RuntimeClass, and Delete reclaim on the storage class. A passing preflight is not the qualification in [qualification](qualification.md). Applying the CRD is not qualification either.
+
+## Client limit
+
+Inspection is HTTP/1.1 through an HTTP CONNECT to port 443. HTTP/2-only clients, WebSocket upgrades and certificate-pinned clients stay blocked. There is no opaque tunnel and no HTTP/2 inspection. This is the same class of limit that blocks clients which speak only HTTP/2 to their model endpoint. Allowing a registry host does not change that limit.
+
 ## Using a project
 
-Sign in, select a repository and enter a project name. A ready project provides a kubectl connection command. Initial cloning creates a dedicated `agent/apc-<workspace-uid>` local branch. Agents can push ordinary non-main branches and open PRs using the project token. No SSH server, coding-agent binary, provider credential or unattended task is enabled automatically.
+Sign in, select a repository and enter a project name. The dashboard can also select the reviewed package registries `go`, `npm`, `python` and `rust`. Each selection allows GET and HEAD for the whole host, including the redirect hosts below. It does not approve package versions, and lockfiles are not read. The resulting HTTPS rules are immutable.
 
-The repository is cloned into `/workspace/repo`. Home, caches and configuration live under the same project volume. Pause preserves that volume. On resume, bootstrap fetches remote updates without resetting the current branch or overwriting local edits. Agents use normal Git commands to incorporate fetched changes and push reviewed work.
+| Selection | Hosts |
+| --- | --- |
+| go | `proxy.golang.org`, `sum.golang.org` |
+| npm | `registry.npmjs.org` |
+| python | `pypi.org`, `files.pythonhosted.org` |
+| rust | `index.crates.io`, `static.crates.io` |
 
-Add HTTPS destinations at project creation through the API or custom resource. The initial policy is immutable: broadening it requires a new environment. Extra host access is never inferred from package files. Package registries often redirect to additional hosts, which must be explicitly authorized.
+A Ready project shows a `kubectl exec` command for the `workspace` container. `agent-project-controller connect <workspace>` runs that shell with the local kubeconfig. The worker does not open an SSH port or any other ingress. Orca, T3 and Roamgate can use the workspace when they can start that command. The command requires phase `Ready`, a recorded namespace and exactly one worker pod.
+
+Initial cloning creates a dedicated `agent/apc-<workspace-uid>` local branch. Agents can push ordinary non-main branches and open PRs using the project token. No provider credential or unattended task is enabled automatically.
+
+The repository is cloned into `/workspace/repo`. Home, caches and configuration live under the same project volume. Pause preserves that volume and the Git identity. On resume, bootstrap fetches remote updates without resetting the current branch or overwriting local edits. Agents use normal Git commands to incorporate fetched changes and push reviewed work.
+
+Model credentials stay out of the image. Create a Secret named `model-access` in the project namespace when a tool needs them. The worker mounts it read-only at `/run/model` and tolerates its absence. Do not copy an owner refresh token into the image or that Secret from the controller. Authenticated model calls are a separate qualification.
+
+Add any other HTTPS destinations at project creation through the API or custom resource. The initial policy is immutable: broadening it requires a new environment. Extra host access is never inferred from package files. Package registries often redirect to additional hosts, which must be explicitly authorized. List every host before creation.
 
 ## Optional telemetry
 
@@ -106,9 +126,13 @@ workspace revocation workflow. Request and verify removal of every workspace
 first so external repository access and project storage are cleaned up.
 
 The coding image is optional and separately published so adopters can choose
-other tools. See [deployment profiles](deployment.md). This remains an alpha
-package: publish live qualification evidence before calling it a supported
-production release.
+other tools. Publish both images by digest. See [deployment profiles](deployment.md)
+and `docs/examples/gvisor-values.yaml`. The qualified gVisor profile sets
+`DNS_DIRECT_ENDPOINTS` to `true` and supplies the gateway JSON. The chart
+default of `false` is not that profile. This remains an alpha package. The
+pilot evidence is summarized in [qualification](qualification.md). Live
+deployment pins for one operator stay in that operator's private
+infrastructure repository and are not required to install the chart.
 
 Configuration changes roll the controller automatically through a pod-template checksum.
 After rotating an externally managed control Secret, restart the controller so

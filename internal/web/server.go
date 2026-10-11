@@ -180,17 +180,32 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		Name       string          `json:"name"`
 		Repository string          `json:"repository"`
 		HTTPS      []api.HTTPSRule `json:"https,omitempty"`
+		Registries []string        `json:"registries,omitempty"`
 	}
 	if e := decode(w, r, &request); e != nil || !validName.MatchString(request.Name) || forgejo.ValidateRepository(request.Repository, s.Owner) != nil {
 		http.Error(w, "invalid project name or repository", 400)
 		return
 	}
-	if len(request.HTTPS) > 0 && proxy.Validate(proxy.Config{Rules: request.HTTPS}) != nil {
+	registryRules, e := proxy.RegistryRules(request.Registries)
+	if e != nil {
+		http.Error(w, "unknown registry selection", 400)
+		return
+	}
+	rules := append(registryRules, request.HTTPS...)
+	seen := map[string]bool{}
+	for _, rule := range rules {
+		if seen[rule.Host] {
+			http.Error(w, "duplicate HTTPS host", 400)
+			return
+		}
+		seen[rule.Host] = true
+	}
+	if len(rules) > 0 && proxy.Validate(proxy.Config{Rules: rules}) != nil {
 		http.Error(w, "invalid HTTPS policy", 400)
 		return
 	}
 	actor, _ := r.Context().Value(actorKey{}).(string)
-	obj := &api.ProjectWorkspace{TypeMeta: metav1.TypeMeta{APIVersion: api.GroupVersion.String(), Kind: "ProjectWorkspace"}, ObjectMeta: metav1.ObjectMeta{Name: request.Name, Namespace: s.Namespace, Annotations: map[string]string{"projects.agentwork.dev/requested-by": actor}}, Spec: api.WorkspaceSpec{Repository: request.Repository, DesiredState: "Running", HTTPS: request.HTTPS}}
+	obj := &api.ProjectWorkspace{TypeMeta: metav1.TypeMeta{APIVersion: api.GroupVersion.String(), Kind: "ProjectWorkspace"}, ObjectMeta: metav1.ObjectMeta{Name: request.Name, Namespace: s.Namespace, Annotations: map[string]string{"projects.agentwork.dev/requested-by": actor}}, Spec: api.WorkspaceSpec{Repository: request.Repository, DesiredState: "Running", HTTPS: rules}}
 	if e := s.Client.Create(r.Context(), obj); e != nil {
 		if apierrors.IsAlreadyExists(e) {
 			http.Error(w, "project name already exists", 409)

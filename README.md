@@ -2,7 +2,7 @@
 
 A Go controller that gives selected Forgejo repositories isolated project environments on Kubernetes Agent Sandbox. Open a project from the dashboard, work on a dedicated branch, then pause it or revoke access and remove its environment.
 
-This is an initial implementation for qualification and review. It has not been deployed or qualified against a live Cilium and Agent Sandbox dataplane. See [installation](docs/installation.md), [security boundaries](docs/security.md), [API](docs/api.md) and [qualification](docs/qualification.md).
+An alpha pilot has run on a live Cilium and gVisor cluster with upstream Agent Sandbox. The qualified combination is Kubernetes 1.36.2, Agent Sandbox 1.0.4, Cilium 1.19.5, gVisor, Forgejo 15.0.9 and Authentik 2026.5.6. See [installation](docs/installation.md), [security boundaries](docs/security.md), [API](docs/api.md) and [qualification](docs/qualification.md) for the evidence and the remaining limits. Deploy digest-pinned images. The moving `:pilot` tag is not a release.
 
 ## Relationship to Agent Sandbox
 
@@ -17,7 +17,7 @@ Agent Sandbox manages the sandbox workloads and supported lifecycle operations. 
 1. An authorized user selects a repository and requests a project environment.
 2. The controller grants repository access and provisions narrowly scoped credentials.
 3. It requests a Sandbox, prepares storage and clones the project.
-4. A dashboard or API client receives readiness and connection information.
+4. A dashboard or API client receives readiness. A Ready workspace is entered with `kubectl exec` into the `workspace` container, or with `agent-project-controller connect`.
 5. Removal revokes credentials and repository grants, stops the environment, removes storage according to policy and verifies cleanup.
 
 Pause preserves project data. Removal has an explicit retention policy. A failed cleanup must remain visible and retryable; access revoked is not equivalent to data removed.

@@ -15,6 +15,8 @@ config:
   CLUSTER_DOMAIN: cluster.local
   DNS_SERVICE_NAMESPACE: kube-system
   DNS_SERVICE_NAME: kube-dns
+  # false uses the CoreDNS ClusterIP. The qualified gVisor profile needs true.
+  # See docs/examples/gvisor-values.yaml.
   DNS_DIRECT_ENDPOINTS: 'false'
   PROXY_GATEWAY_JSON: ''
   WORKSPACE_CPU_REQUEST: 500m

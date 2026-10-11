@@ -32,14 +32,30 @@ owner's refresh credential into a project image or workspace.
 
 The proxy Service is headless so workers connect directly to the selected
 proxy pod. If your sandbox runtime bypasses Cilium's socket service translation,
-set `DNS_DIRECT_ENDPOINTS=true`. The provider discovers ready CoreDNS
-EndpointSlices and verifies every chosen address against its referenced
+set `DNS_DIRECT_ENDPOINTS=true`. The provider discovers up to three ready
+CoreDNS EndpointSlices and verifies every chosen address against its referenced
 CoreDNS pod. DNS policy still selects only CoreDNS pods and permits the same
-exact query names. The default uses the configured CoreDNS Service IP.
-A change in discovered DNS endpoints causes existing pod configuration to fail
-its drift check. Remove and recreate affected workspaces after saving desired
-work through Git. Automated non-destructive DNS endpoint migration remains a
-follow-up requirement before adopting this profile for long-lived workspaces.
+exact query names. The Helm default is `false`, which uses the CoreDNS Service
+IP. That default failed on the qualified gVisor cluster. Use
+`docs/examples/gvisor-values.yaml` for the profile that passed.
+
+When the only difference is the discovered nameserver list, the controller
+patches the Sandbox pod template and the proxy Deployment, then deletes worker
+pods whose resolvers are stale. The project volume, namespace and Forgejo
+identity stay. The proxy Deployment rolls its own pods. A later reconcile
+still restarts a worker that is running the old resolver after a crash between
+the template patch and the pod deletion. If no ready CoreDNS endpoint is
+found, reconciliation stops and the existing pods are left in place. Any other
+Sandbox, proxy, storage or network change is still rejected and the workspace
+is suspended.
+
+The worker template mounts an optional `model-access` Secret at `/run/model`.
+That mount is part of the pod template. Upgrading the controller while a
+workspace is still Running is treated as template drift and suspends that
+workspace. Save local work through Git, then remove and recreate it, or start
+the new controller only when no workspace is Running or Paused. The Secret is
+not copied into the image, and the controller does not copy an owner refresh
+token.
 
 If Cilium's SNI interception resets connections to a gateway on the proxy's own
 node, the operator can add `"disableSNIFilter":true` to `PROXY_GATEWAY_JSON`.

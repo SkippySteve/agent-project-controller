@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -414,13 +415,54 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 			if e != nil || json.Unmarshal(encoded, &spec) != nil || !safePod(spec) {
 				return errors.New("unsafe Sandbox pod configuration drift detected")
 			}
-			got["operatingMode"] = want["operatingMode"]
-			if !contains(got, want) {
+			gotCopy, _ := cloneValue(got).(map[string]any)
+			wantCopy, _ := cloneValue(want).(map[string]any)
+			normalizeSandboxNameservers(gotCopy)
+			normalizeSandboxNameservers(wantCopy)
+			gotCopy["operatingMode"] = want["operatingMode"]
+			if !contains(gotCopy, wantCopy) {
 				return errors.New("Sandbox configuration drift detected")
 			}
-			old := current.DeepCopy()
-			_ = unstructured.SetNestedField(current.Object, want["operatingMode"], "spec", "operatingMode")
-			return r.Patch(ctx, current, client.MergeFrom(old))
+			gotNS, _, e := unstructured.NestedStringSlice(got, "podTemplate", "spec", "dnsConfig", "nameservers")
+			if e != nil {
+				return e
+			}
+			wantNS, foundNS, e := unstructured.NestedStringSlice(want, "podTemplate", "spec", "dnsConfig", "nameservers")
+			if e != nil || !foundNS || len(wantNS) == 0 {
+				return errors.New("Sandbox DNS nameservers missing")
+			}
+			dnsChanged := !reflect.DeepEqual(gotNS, wantNS)
+			mode, _, _ := unstructured.NestedString(current.Object, "spec", "operatingMode")
+			modeChanged := mode != fmt.Sprint(want["operatingMode"])
+			if dnsChanged || modeChanged {
+				old := current.DeepCopy()
+				if modeChanged {
+					_ = unstructured.SetNestedField(current.Object, want["operatingMode"], "spec", "operatingMode")
+				}
+				if dnsChanged {
+					values := make([]any, len(wantNS))
+					for i := range wantNS {
+						values[i] = wantNS[i]
+					}
+					if e = unstructured.SetNestedSlice(current.Object, values, "spec", "podTemplate", "spec", "dnsConfig", "nameservers"); e != nil {
+						return e
+					}
+				}
+				if e = r.Patch(ctx, current, client.MergeFrom(old)); e != nil {
+					return e
+				}
+			}
+			// Restart a worker only when its resolver differs. The claim, namespace and Forgejo identity stay.
+			// A retry after a crash still sees the stale pod even if the template patch already landed.
+			restarted, e := r.restartStaleDNSWorkers(ctx, w, wantNS)
+			if e != nil {
+				return e
+			}
+			if !dnsChanged && !restarted {
+				return nil
+			}
+			sum := sha256.Sum256([]byte(strings.Join(wantNS, ",")))
+			return r.audit(ctx, w, "dns-"+hex.EncodeToString(sum[:6]))
 		}
 		if !same(got, want) {
 			return errors.New("network policy drift detected")
@@ -437,8 +479,27 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 			return errors.New("project configuration drift detected")
 		}
 	case *appsv1.Deployment:
-		if !safePod(existing.(*appsv1.Deployment).Spec.Template.Spec) || !contains(existing.(*appsv1.Deployment).Spec, expected.Spec) {
+		current := existing.(*appsv1.Deployment)
+		if !safePod(current.Spec.Template.Spec) {
 			return errors.New("proxy deployment drift detected")
+		}
+		gotSpec := current.Spec.DeepCopy()
+		wantSpec := expected.Spec.DeepCopy()
+		if gotSpec.Template.Spec.DNSConfig != nil {
+			gotSpec.Template.Spec.DNSConfig.Nameservers = []string{"normalized"}
+		}
+		if wantSpec.Template.Spec.DNSConfig != nil {
+			wantSpec.Template.Spec.DNSConfig.Nameservers = []string{"normalized"}
+		}
+		if !contains(*gotSpec, *wantSpec) || current.Spec.Template.Spec.DNSConfig == nil || expected.Spec.Template.Spec.DNSConfig == nil {
+			return errors.New("proxy deployment drift detected")
+		}
+		if !reflect.DeepEqual(current.Spec.Template.Spec.DNSConfig.Nameservers, expected.Spec.Template.Spec.DNSConfig.Nameservers) {
+			old := current.DeepCopy()
+			current.Spec.Template.Spec.DNSConfig.Nameservers = append([]string{}, expected.Spec.Template.Spec.DNSConfig.Nameservers...)
+			if e = r.Patch(ctx, current, client.MergeFrom(old)); e != nil {
+				return e
+			}
 		}
 	case *corev1.ServiceAccount:
 		actual := existing.(*corev1.ServiceAccount)
@@ -466,6 +527,41 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 		}
 	}
 	return nil
+}
+func cloneValue(v any) any {
+	encoded, e := json.Marshal(v)
+	if e != nil {
+		return nil
+	}
+	var out any
+	if json.Unmarshal(encoded, &out) != nil {
+		return nil
+	}
+	return out
+}
+func normalizeSandboxNameservers(spec map[string]any) {
+	_ = unstructured.SetNestedStringSlice(spec, []string{"normalized"}, "podTemplate", "spec", "dnsConfig", "nameservers")
+}
+func (r *Reconciler) restartStaleDNSWorkers(ctx context.Context, w *api.ProjectWorkspace, want []string) (bool, error) {
+	var pods corev1.PodList
+	if e := r.List(ctx, &pods, client.InNamespace(namespace(w)), client.MatchingLabels{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": "worker"}); e != nil {
+		return false, e
+	}
+	restarted := false
+	for i := range pods.Items {
+		got := []string{}
+		if pods.Items[i].Spec.DNSConfig != nil {
+			got = pods.Items[i].Spec.DNSConfig.Nameservers
+		}
+		if reflect.DeepEqual(got, want) {
+			continue
+		}
+		if e := r.Delete(ctx, &pods.Items[i]); e != nil && !apierrors.IsNotFound(e) {
+			return restarted, e
+		}
+		restarted = true
+	}
+	return restarted, nil
 }
 func (r *Reconciler) workerGone(ctx context.Context, w *api.ProjectWorkspace) (bool, error) {
 	var pods corev1.PodList
@@ -715,10 +811,10 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 	objects = append(objects, proxyDeployment)
 	u, _ := url.Parse(r.Config.ForgejoOrigin)
 	env := []corev1.EnvVar{{Name: "HOME", Value: "/workspace/home"}, {Name: "GIT_ORIGIN", Value: r.Config.ForgejoOrigin}, {Name: "GIT_HOST", Value: u.Host}, {Name: "GIT_REPOSITORY", Value: w.Spec.Repository}, {Name: "GIT_WORK_BRANCH", Value: "agent/" + identity(w)}, {Name: "GIT_TERMINAL_PROMPT", Value: "0"}, {Name: "HTTPS_PROXY", Value: "http://proxy:3128"}, {Name: "https_proxy", Value: "http://proxy:3128"}, {Name: "HTTP_PROXY", Value: "http://proxy:3128"}, {Name: "http_proxy", Value: "http://proxy:3128"}, {Name: "SSL_CERT_FILE", Value: "/workspace/home/ca-bundle.crt"}, {Name: "NODE_EXTRA_CA_CERTS", Value: "/trust/ca.crt"}, {Name: "REQUESTS_CA_BUNDLE", Value: "/workspace/home/ca-bundle.crt"}}
-	mounts := []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}, {Name: "identity", MountPath: "/identity", ReadOnly: true}, {Name: "trust", MountPath: "/trust", ReadOnly: true}, {Name: "scratch", MountPath: "/tmp"}}
+	mounts := []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}, {Name: "identity", MountPath: "/identity", ReadOnly: true}, {Name: "trust", MountPath: "/trust", ReadOnly: true}, {Name: "model", MountPath: "/run/model", ReadOnly: true}, {Name: "scratch", MountPath: "/tmp"}}
 	workerlabels := labels(w)
 	workerlabels["projects.agentwork.dev/role"] = "worker"
-	spec := corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, RuntimeClassName: &r.Config.RuntimeClass, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(5), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolp(true), RunAsUser: int64p(1000), RunAsGroup: int64p(1000), FSGroup: int64p(1000)}, InitContainers: []corev1.Container{{Name: "clone", Image: r.Config.Image, Args: []string{"bootstrap"}, Env: env, SecurityContext: security, Resources: workerResources, VolumeMounts: mounts}}, Containers: []corev1.Container{{Name: "workspace", Image: r.Config.Image, Command: []string{"/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"}, Env: env, WorkingDir: "/workspace/repo", SecurityContext: security, Resources: workerResources, VolumeMounts: mounts, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"test", "-f", "/workspace/.ready"}}}}}}, Volumes: []corev1.Volume{{Name: "workspace", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "workspace"}}}, {Name: "identity", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "git-identity", DefaultMode: int32p(0440)}}}, {Name: "trust", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "trust"}}}}, {Name: "scratch", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}}
+	spec := corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, RuntimeClassName: &r.Config.RuntimeClass, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(5), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolp(true), RunAsUser: int64p(1000), RunAsGroup: int64p(1000), FSGroup: int64p(1000)}, InitContainers: []corev1.Container{{Name: "clone", Image: r.Config.Image, Args: []string{"bootstrap"}, Env: env, SecurityContext: security, Resources: workerResources, VolumeMounts: mounts}}, Containers: []corev1.Container{{Name: "workspace", Image: r.Config.Image, Command: []string{"/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"}, Env: env, WorkingDir: "/workspace/repo", SecurityContext: security, Resources: workerResources, VolumeMounts: mounts, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"test", "-f", "/workspace/.ready"}}}}}}, Volumes: []corev1.Volume{{Name: "workspace", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "workspace"}}}, {Name: "identity", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "git-identity", DefaultMode: int32p(0440)}}}, {Name: "trust", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "trust"}}}}, {Name: "model", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "model-access", Optional: boolp(true), DefaultMode: int32p(0440)}}}, {Name: "scratch", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}}
 	b, e := json.Marshal(spec)
 	if e != nil {
 		return e

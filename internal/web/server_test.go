@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/forgejo"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -53,6 +55,58 @@ func TestAuthenticationCSRFAndCreation(t *testing.T) {
 		if rec.Code != test.status {
 			t.Errorf("%s %s: got %d: %s", test.auth, test.origin, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestRegistrySelection(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = api.AddToScheme(scheme)
+	password := strings.Repeat("a", 32)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	s := &Server{Client: c, Host: host{}, Namespace: "control", Owner: "steve", Password: password, Origin: "https://projects.example.com", AllowBasic: true}
+	h, e := s.Handler()
+	if e != nil {
+		t.Fatal(e)
+	}
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+password)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, body := range []string{
+		`{"name":"bad-registry","repository":"steve/repo","registries":["maven"]}`,
+		`{"name":"repeated","repository":"steve/repo","registries":["go","go"]}`,
+		`{"name":"duplicate-host","repository":"steve/repo","registries":["go"],"https":[{"host":"proxy.golang.org","methods":["GET"],"paths":["/"]}]}`,
+	} {
+		if rec := post(body); rec.Code != 400 {
+			t.Fatalf("%s: got %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	rec := post(`{"name":"go-project","repository":"steve/repo","registries":["go"]}`)
+	if rec.Code != 201 {
+		t.Fatal(rec.Code, rec.Body.String())
+	}
+	var created api.ProjectWorkspace
+	if e = json.Unmarshal(rec.Body.Bytes(), &created); e != nil {
+		t.Fatal(e)
+	}
+	if len(created.Spec.HTTPS) != 2 || created.Spec.HTTPS[0].Host != "proxy.golang.org" || created.Spec.HTTPS[1].Host != "sum.golang.org" {
+		t.Fatalf("rules = %#v", created.Spec.HTTPS)
+	}
+	for _, rule := range created.Spec.HTTPS {
+		if len(rule.Methods) != 2 || rule.Methods[0] != "GET" || rule.Methods[1] != "HEAD" || len(rule.Paths) != 1 || rule.Paths[0] != "/" {
+			t.Fatalf("rule = %#v", rule)
+		}
+	}
+	stored := &api.ProjectWorkspace{}
+	if e = c.Get(context.Background(), types.NamespacedName{Namespace: "control", Name: "go-project"}, stored); e != nil {
+		t.Fatal(e)
+	}
+	if len(stored.Spec.HTTPS) != 2 {
+		t.Fatal("stored policy dropped registry hosts")
 	}
 }
 

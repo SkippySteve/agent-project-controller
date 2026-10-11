@@ -2,7 +2,11 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
@@ -11,6 +15,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,12 +28,15 @@ import (
 
 type host struct {
 	grantCalls, revokeCalls int
-	failRevoke              bool
+	failGrant, failRevoke   bool
 }
 
 func (h *host) Discover(context.Context) ([]forgejo.Repository, error) { return nil, nil }
 func (h *host) Grant(context.Context, string, forgejo.Credentials) (string, error) {
 	h.grantCalls++
+	if h.failGrant {
+		return "", errors.New("Forgejo unavailable")
+	}
 	return "fixture-token", nil
 }
 func (h *host) Revoke(context.Context, string, forgejo.Credentials) error {
@@ -44,6 +52,22 @@ type provider struct{ network.Cilium }
 func (provider) Check(context.Context, client.Client) error { return nil }
 func (provider) DNS(context.Context, client.Client, string) (*corev1.PodDNSConfig, error) {
 	return &corev1.PodDNSConfig{Nameservers: []string{"10.96.0.10"}}, nil
+}
+
+// mutableDNS lets a test move only the CoreDNS addresses the provider reports.
+type mutableDNS struct {
+	network.Cilium
+	servers []string
+	fail    bool
+}
+
+func (m *mutableDNS) Check(context.Context, client.Client) error { return nil }
+func (m *mutableDNS) DNS(context.Context, client.Client, string) (*corev1.PodDNSConfig, error) {
+	if m.fail || len(m.servers) == 0 {
+		return nil, errors.New("no ready inspected CoreDNS pod endpoints")
+	}
+	ndots := "1"
+	return &corev1.PodDNSConfig{Nameservers: append([]string{}, m.servers...), Searches: []string{"svc.cluster.local"}, Options: []corev1.PodDNSConfigOption{{Name: "ndots", Value: &ndots}}}, nil
 }
 func fixture(t *testing.T) (*Reconciler, *api.ProjectWorkspace, *host) {
 	t.Helper()
@@ -293,5 +317,178 @@ func TestAddedSandboxHostNetworkingRejected(t *testing.T) {
 	}
 	if e := r.ensure(ctx, w); e == nil {
 		t.Fatal("Sandbox gained host network access")
+	}
+}
+
+func TestGrantOutagePreservesLedger(t *testing.T) {
+	ctx := context.Background()
+	r, w, h := fixture(t)
+	h.failGrant = true
+	if e := r.ensure(ctx, w); e == nil {
+		t.Fatal("grant outage treated as success")
+	}
+	var secret corev1.Secret
+	key := types.NamespacedName{Namespace: "control", Name: identity(w)}
+	if e := r.Get(ctx, key, &secret); e != nil {
+		t.Fatal(e)
+	}
+	username := string(secret.Data["username"])
+	if username == "" || len(secret.Data["password"]) == 0 || len(secret.Data["token"]) != 0 {
+		t.Fatal("ledger missing its password or stored a token during the outage")
+	}
+	h.failGrant = false
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Get(ctx, key, &secret); e != nil {
+		t.Fatal(e)
+	}
+	if string(secret.Data["username"]) != username || len(secret.Data["token"]) == 0 || len(secret.Data["password"]) == 0 {
+		t.Fatal("retry replaced the workspace identity")
+	}
+}
+
+func TestDNSEndpointMigration(t *testing.T) {
+	ctx := context.Background()
+	r, w, _ := fixture(t)
+	dns := &mutableDNS{servers: []string{"10.96.0.10"}}
+	r.Network = dns
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	ns := namespace(w)
+	worker := func(name string, servers []string) *corev1.Pod {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": "worker"}}, Spec: corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: &corev1.PodDNSConfig{Nameservers: servers}, Containers: []corev1.Container{{Name: "workspace", Image: "example.com/worker:test"}}}}
+	}
+	if e := r.Create(ctx, worker("worker-old", []string{"10.96.0.10"})); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Create(ctx, worker("worker-current", []string{"10.1.2.3"})); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.Create(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "proxy-pod", Namespace: ns, Labels: labels(w)}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "proxy", Image: "example.com/worker:test"}}}}); e != nil {
+		t.Fatal(e)
+	}
+	dns.servers = []string{"10.1.2.3"}
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(sandboxGVK)
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "project"}, u); e != nil {
+		t.Fatal(e)
+	}
+	got, _, e := unstructured.NestedStringSlice(u.Object, "spec", "podTemplate", "spec", "dnsConfig", "nameservers")
+	if e != nil || len(got) != 1 || got[0] != "10.1.2.3" {
+		t.Fatalf("sandbox nameservers = %v (%v)", got, e)
+	}
+	var deployment appsv1.Deployment
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "proxy"}, &deployment); e != nil {
+		t.Fatal(e)
+	}
+	if servers := deployment.Spec.Template.Spec.DNSConfig.Nameservers; len(servers) != 1 || servers[0] != "10.1.2.3" {
+		t.Fatalf("proxy nameservers = %v", servers)
+	}
+	var stale corev1.Pod
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "worker-old"}, &stale); !apierrors.IsNotFound(e) {
+		t.Fatal("stale worker was kept", e)
+	}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "worker-current"}, &stale); e != nil {
+		t.Fatal("worker that already had the new resolver was deleted", e)
+	}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "proxy-pod"}, &stale); e != nil {
+		t.Fatal("non-worker pod deleted", e)
+	}
+	var pvc corev1.PersistentVolumeClaim
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "workspace"}, &pvc); e != nil {
+		t.Fatal("project volume deleted", e)
+	}
+	var gitIdentity, ledger corev1.Secret
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "git-identity"}, &gitIdentity); e != nil {
+		t.Fatal("git identity deleted", e)
+	}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: "control", Name: identity(w)}, &ledger); e != nil || len(ledger.Data["password"]) == 0 {
+		t.Fatal("control ledger deleted", e)
+	}
+	volumes, _, e := unstructured.NestedSlice(u.Object, "spec", "podTemplate", "spec", "volumes")
+	if e != nil {
+		t.Fatal(e)
+	}
+	var model map[string]any
+	for _, raw := range volumes {
+		volume, _ := raw.(map[string]any)
+		if volume["name"] == "model" {
+			model = volume
+		}
+	}
+	secret, _ := model["secret"].(map[string]any)
+	if secret["secretName"] != "model-access" || secret["optional"] != true {
+		t.Fatalf("model volume = %#v", model)
+	}
+	foundMount := false
+	containerMounts, _, e := unstructured.NestedSlice(u.Object, "spec", "podTemplate", "spec", "containers")
+	if e != nil || len(containerMounts) == 0 {
+		t.Fatal(e)
+	}
+	container, _ := containerMounts[0].(map[string]any)
+	for _, raw := range container["volumeMounts"].([]any) {
+		mount, _ := raw.(map[string]any)
+		if mount["name"] == "model" && mount["mountPath"] == "/run/model" && mount["readOnly"] == true {
+			foundMount = true
+		}
+	}
+	if !foundMount {
+		t.Fatal("model credentials are not mounted read-only at /run/model")
+	}
+	sum := sha256.Sum256([]byte("10.1.2.3"))
+	auditName := fmt.Sprintf("audit-%s-%d-dns-%s", strings.ReplaceAll(string(w.UID), "-", ""), w.Generation, hex.EncodeToString(sum[:6]))
+	if e := r.Get(ctx, types.NamespacedName{Namespace: "control", Name: auditName}, &corev1.ConfigMap{}); e != nil {
+		t.Fatal("dns migration was not audited", e)
+	}
+	dns.fail = true
+	if e := r.Create(ctx, worker("worker-old", []string{"10.96.0.10"})); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.ensure(ctx, w); e == nil {
+		t.Fatal("missing CoreDNS endpoints were ignored")
+	}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "worker-old"}, &stale); e != nil {
+		t.Fatal("endpoint outage deleted the worker", e)
+	}
+	if e := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "project"}, u); e != nil {
+		t.Fatal(e)
+	}
+	got, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "podTemplate", "spec", "dnsConfig", "nameservers")
+	if len(got) != 1 || got[0] != "10.1.2.3" {
+		t.Fatalf("endpoint outage changed nameservers to %v", got)
+	}
+}
+
+func TestSandboxImageDriftRejected(t *testing.T) {
+	ctx := context.Background()
+	r, w, _ := fixture(t)
+	if e := r.ensure(ctx, w); e != nil {
+		t.Fatal(e)
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(sandboxGVK)
+	if e := r.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "project"}, u); e != nil {
+		t.Fatal(e)
+	}
+	containers, _, e := unstructured.NestedSlice(u.Object, "spec", "podTemplate", "spec", "containers")
+	if e != nil || len(containers) == 0 {
+		t.Fatal(e)
+	}
+	container := containers[0].(map[string]any)
+	container["image"] = "evil.example/worker:latest"
+	containers[0] = container
+	if e = unstructured.SetNestedSlice(u.Object, containers, "spec", "podTemplate", "spec", "containers"); e != nil {
+		t.Fatal(e)
+	}
+	if e = r.Update(ctx, u); e != nil {
+		t.Fatal(e)
+	}
+	if e = r.ensure(ctx, w); e == nil {
+		t.Fatal("sandbox image drift accepted")
 	}
 }

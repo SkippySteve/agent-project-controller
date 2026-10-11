@@ -9,6 +9,8 @@ render:
 	kubectl kustomize config/deploy
 qualify-forgejo:
 	python3 scripts/qualify-forgejo.py
+qualify-recovery:
+	python3 scripts/qualify-recovery.py self-check
 
 .PHONY: chart-check package
 chart-check:
