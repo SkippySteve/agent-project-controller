@@ -108,3 +108,15 @@ The HTTP/2 inspected response path now flushes each copied chunk. A regression t
 A fresh immutable coding worker passed an authenticated coding task with the packaged Codex 0.159.0 client. The task created `add.py` and `test_add.py`, completed three independently rerun tests, pushed its controller-issued branch and opened a pull request in a disposable repository. The built-in provider fell back from a denied WebSocket attempt to inspected HTTP POST. Streaming produced 20 text deltas. No refresh token or raw protocol events were retained. The worker used the corrected package layout and bootstrap Git author defaults, without manual package copying or author configuration.
 
 This qualifies the coding path in the existing cluster. It does not qualify installation on a second cluster, encrypted disaster recovery, a public release, or unattended operation.
+
+### Credential lifecycle and manual terminal qualification
+
+A disposable Helm controller passed renewal with worker termination, expiry stopping the worker, grant removal, refusal to run after removal across a controller restart, and recovery with a valid replacement grant. Its volume survived. The updated controller rolled onto the pilot without replacing its worker, ledger, Git identity or volume. A later explicit worker-image upgrade paused the pilot, replaced its immutable Sandbox template, resumed it, and preserved its volume, identity, ledger and saved file.
+
+The manual `model` command passed an authenticated turn in an Orca terminal. It ran the three existing fixture tests, returned their success and returned to its task prompt. The terminal client now puts the local TTY in raw mode and restores it when streaming ends. This is a text terminal connection, rather than a registered native Orca provider.
+
+### Encrypted disposable recovery check
+
+The recovery script now encrypts its credential-ledger record with AES-GCM before writing it to a private file. A separate private operator key is required. Tampered ciphertext, the wrong key, a symlink key and unsafe key permissions fail local tests. On the disposable Helm controller, a worker restart preserved its volume marker. Removing the ledger while reconciliation was stopped, then requesting workspace removal, left cleanup incomplete. Restoring the authenticated encrypted ledger allowed external revocation and owned namespace/storage removal to finish. The temporary encrypted record was then removed.
+
+This is a credential-ledger recovery check with the original request UID and project volume retained. It is not a complete controller/workspace backup system or a recovery test for loss of the control namespace or volume. External backup destination and retention are deferred by the operator. Keep those recovery gates open.
