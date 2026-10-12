@@ -538,7 +538,7 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 			normalizeSandboxNameservers(wantCopy)
 			gotCopy["operatingMode"] = want["operatingMode"]
 			if !contains(gotCopy, wantCopy) {
-				return errors.New("Sandbox configuration drift detected")
+				return r.replaceWorkspaceImage(ctx, w, current, got, want)
 			}
 			gotNS, _, e := unstructured.NestedStringSlice(got, "podTemplate", "spec", "dnsConfig", "nameservers")
 			if e != nil {
@@ -683,6 +683,61 @@ func cloneValue(v any) any {
 }
 func normalizeSandboxNameservers(spec map[string]any) {
 	_ = unstructured.SetNestedStringSlice(spec, []string{"normalized"}, "podTemplate", "spec", "dnsConfig", "nameservers")
+}
+
+// replaceWorkspaceImage recreates a Sandbox only when the pinned workspace
+// image is the sole template difference and no worker pod is left. The
+// observed image is never written back. The project volume is independent of
+// the Sandbox, so the next ensure keeps that claim and installs the pin.
+func (r *Reconciler) replaceWorkspaceImage(ctx context.Context, w *api.ProjectWorkspace, current *unstructured.Unstructured, got, want map[string]any) error {
+	gotCopy, _ := cloneValue(got).(map[string]any)
+	wantCopy, _ := cloneValue(want).(map[string]any)
+	if gotCopy == nil || wantCopy == nil {
+		return errors.New("Sandbox configuration drift detected")
+	}
+	normalizeSandboxNameservers(gotCopy)
+	normalizeSandboxNameservers(wantCopy)
+	normalizeSandboxWorkloadImages(gotCopy)
+	normalizeSandboxWorkloadImages(wantCopy)
+	gotCopy["operatingMode"] = want["operatingMode"]
+	if !contains(gotCopy, wantCopy) {
+		return errors.New("Sandbox configuration drift detected")
+	}
+	gone, err := r.workerGone(ctx, w)
+	if err != nil {
+		return err
+	}
+	if !gone {
+		return errors.New("Sandbox configuration drift detected")
+	}
+	if err = r.Delete(ctx, current); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return errors.New("Sandbox workspace image is being replaced")
+}
+func normalizeSandboxWorkloadImages(spec map[string]any) {
+	pod, _ := spec["podTemplate"].(map[string]any)
+	if pod == nil {
+		return
+	}
+	body, _ := pod["spec"].(map[string]any)
+	if body == nil {
+		return
+	}
+	for _, key := range []string{"initContainers", "containers"} {
+		items, _ := body[key].([]any)
+		for i, raw := range items {
+			container, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := container["name"].(string)
+			if name == "clone" || name == "workspace" {
+				container["image"] = "normalized"
+				items[i] = container
+			}
+		}
+	}
 }
 func normalizeProxyDrift(spec *appsv1.DeploymentSpec) {
 	if spec.Template.Spec.DNSConfig != nil {
