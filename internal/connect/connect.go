@@ -69,7 +69,7 @@ func Exec(ctx context.Context, config *rest.Config, namespace, pod string, comma
 	if e != nil {
 		return e
 	}
-	request := clientset.CoreV1().RESTClient().Post().Resource("pods").Name(pod).Namespace(namespace).SubResource("exec").VersionedParams(&corev1.PodExecOptions{Container: "workspace", Command: command, Stdin: true, Stdout: true, Stderr: true, TTY: tty}, scheme.ParameterCodec)
+	request := clientset.CoreV1().RESTClient().Post().Resource("pods").Name(pod).Namespace(namespace).SubResource("exec").VersionedParams(&corev1.PodExecOptions{Container: "workspace", Command: command, Stdin: in != nil, Stdout: true, Stderr: true, TTY: tty}, scheme.ParameterCodec)
 	executor, e := remotecommand.NewSPDYExecutor(config, "POST", request.URL())
 	if e != nil {
 		return e

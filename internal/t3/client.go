@@ -11,7 +11,6 @@ import (
 	"html"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -20,10 +19,7 @@ import (
 	"time"
 
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/connect"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -49,45 +45,22 @@ func Launch(ctx context.Context, c client.Client, config *rest.Config, control, 
 		defer stopCancel()
 		_ = connect.Exec(stopCtx, config, pod.Namespace, pod.Name, []string{"/usr/local/bin/agent-project-controller", "t3-stop", instance}, nil, io.Discard, io.Discard, false)
 	}()
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return err
-	}
-	endpoint := clientset.CoreV1().RESTClient().Post().Resource("pods").Namespace(pod.Namespace).Name(pod.Name).SubResource("portforward").URL()
-	transport, upgrader, err := spdy.RoundTripperFor(config)
-	if err != nil {
-		return err
-	}
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", endpoint)
-	stop := make(chan struct{})
-	defer close(stop)
-	ready := make(chan struct{})
-	forward, err := portforward.NewOnAddresses(dialer, []string{"127.0.0.1"}, []string{"0:8788"}, stop, ready, io.Discard, io.Discard)
-	if err != nil {
-		return err
-	}
-	forwardDone := make(chan error, 1)
-	go func() { forwardDone <- forward.ForwardPorts() }()
-	select {
-	case <-ready:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(30 * time.Second):
-		return errors.New("T3 local tunnel did not start")
-	case <-forwardDone:
-		return errors.New("T3 local tunnel failed")
-	}
-	ports, err := forward.GetPorts()
-	if err != nil || len(ports) != 1 {
-		return errors.New("T3 local port unavailable")
-	}
-	port := strconv.Itoa(int(ports[0].Local))
-	address := "127.0.0.1:" + port
-	for i := 0; i < 60; i++ {
-		conn, e := net.DialTimeout("tcp", address, time.Second)
+	// Wait inside the worker. Dialing the forwarding listener before the remote
+	// server is ready can close the entire forwarding session.
+	for i := 0; ; i++ {
+		select {
+		case <-serverDone:
+			return errors.New("T3 server exited; verify the workspace image")
+		default:
+		}
+		probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
+		e := connect.Exec(probeCtx, config, pod.Namespace, pod.Name, []string{"/usr/bin/curl", "--noproxy", "*", "--fail", "--silent", "--max-time", "2", "--output", "/dev/null", "http://127.0.0.1:8788/"}, nil, io.Discard, io.Discard, false)
+		probeCancel()
 		if e == nil {
-			conn.Close()
 			break
+		}
+		if i == 59 {
+			return errors.New("T3 server did not become ready")
 		}
 		select {
 		case <-ctx.Done():
@@ -96,12 +69,34 @@ func Launch(ctx context.Context, c client.Client, config *rest.Config, control, 
 			return errors.New("T3 server exited; verify the workspace image")
 		case <-time.After(time.Second):
 		}
-		if i == 59 {
-			return errors.New("T3 server did not become ready")
-		}
 	}
-	// A port-forward listener accepts connections before the remote server is ready.
-	// Pairing creation retries until T3's database has initialized.
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	forwardDone := make(chan error, 1)
+	slots := make(chan struct{}, 16)
+	go func() {
+		for {
+			conn, e := listener.AcceptTCP()
+			if e != nil {
+				forwardDone <- e
+				return
+			}
+			select {
+			case slots <- struct{}{}:
+				go func() {
+					defer func() { conn.Close(); <-slots }()
+					_ = connect.Exec(ctx, config, pod.Namespace, pod.Name, []string{"/usr/local/bin/agent-project-controller", "t3-relay"}, conn, conn, io.Discard, false)
+				}()
+			default:
+				conn.Close()
+			}
+		}
+	}()
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	address := "127.0.0.1:" + port
 	var pairing bytes.Buffer
 	var pairErr error
 	for i := 0; i < 30; i++ {
