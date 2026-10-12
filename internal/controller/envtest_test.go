@@ -58,6 +58,12 @@ func TestProvisioningWithAPIDefaults(t *testing.T) {
 		t.Fatal(e)
 	}
 	r := &Reconciler{Client: c, Host: &host{}, Network: provider{}, Config: Config{Namespace: "control", Owner: "steve", ForgejoOrigin: "https://git.example.com", Image: "example.com/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RuntimeClass: "gvisor", StorageClass: "delete", StorageSize: "1Gi"}}
+	placement, err := ParseScheduling(`{"nodeSelector":{"pool":"agents"},"tolerations":[{"key":"dedicated","operator":"Exists","effect":"NoSchedule"}],"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"kubernetes.io/arch","operator":"In","values":["amd64"]}]}]}}}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Config.WorkerScheduling = placement
+	r.Config.ProxyScheduling = Scheduling{NodeSelector: map[string]string{"pool": "proxies"}}
 	policy := corev1.PersistentVolumeReclaimDelete
 	if e = c.Create(ctx, &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "delete"}, Provisioner: "fixture", ReclaimPolicy: &policy}); e != nil {
 		t.Fatal(e)
@@ -82,6 +88,9 @@ func TestProvisioningWithAPIDefaults(t *testing.T) {
 	if pod["dnsPolicy"] != "None" || pod["runtimeClassName"] != "gvisor" || pod["automountServiceAccountToken"] != false {
 		t.Fatal("upstream schema did not preserve isolation and DNS settings")
 	}
+	if !contains(pod["nodeSelector"], map[string]any{"pool": "agents"}) || pod["affinity"] == nil || pod["tolerations"] == nil {
+		t.Fatal("upstream schema pruned workspace placement")
+	}
 	containers, _, _ := unstructured.NestedSlice(pod, "containers")
 	worker := containers[0].(map[string]any)
 	if !contains(worker["resources"], map[string]any{"limits": map[string]any{"cpu": "4", "memory": "4Gi"}}) {
@@ -96,6 +105,9 @@ func TestProvisioningWithAPIDefaults(t *testing.T) {
 	}
 	if deployment.Spec.Template.Spec.DNSPolicy != corev1.DNSNone || deployment.Spec.Template.Spec.Containers[0].Resources.Limits.Memory().String() != "512Mi" {
 		t.Fatal("proxy settings lost to API defaulting")
+	}
+	if deployment.Spec.Template.Spec.NodeSelector["pool"] != "proxies" {
+		t.Fatal("proxy placement lost to API defaulting")
 	}
 	w.Spec.DesiredState = "Paused"
 	if e = c.Update(ctx, w); e != nil {

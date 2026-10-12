@@ -12,11 +12,32 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: {{ toJson (dict "config" .Values.config "workspaceImage" .Values.workspaceImage "proxyImage" (default .Values.controllerImage .Values.proxyImage)) | sha256sum }}
+        checksum/config: {{ toJson (dict "config" .Values.config "workspaceImage" .Values.workspaceImage "proxyImage" (default .Values.controllerImage .Values.proxyImage) "workspaceScheduling" .Values.workspaceScheduling "proxyScheduling" .Values.proxyScheduling "proxyGateway" .Values.proxyGateway) | sha256sum }}
       labels:
         app.kubernetes.io/name: agent-project-controller
     spec:
       serviceAccountName: controller
+      dnsPolicy: {{ .Values.controllerDNS.policy | quote }}
+{{- with .Values.controllerDNS.config }}
+      dnsConfig:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.controllerScheduling.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.controllerScheduling.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.controllerScheduling.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.controllerImagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | indent 8 }}
+{{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

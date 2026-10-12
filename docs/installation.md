@@ -128,7 +128,7 @@ first so external repository access and project storage are cleaned up.
 The coding image is optional and separately published so adopters can choose
 other tools. Publish both images by digest. See [deployment profiles](deployment.md)
 and `docs/examples/gvisor-values.yaml`. The qualified gVisor profile sets
-`DNS_DIRECT_ENDPOINTS` to `true` and supplies the gateway JSON. The chart
+`DNS_DIRECT_ENDPOINTS` to `true` and supplies structured `proxyGateway` values. The chart
 default of `false` is not that profile. This remains an alpha package. The
 pilot evidence is summarized in [qualification](qualification.md). Live
 deployment pins for one operator stay in that operator's private
@@ -144,3 +144,71 @@ It does not sign you out of the identity provider or your other applications.
 Select Sign in to start a new dashboard session.
 
 Before uninstalling the Helm release, request removal of every project and wait for `Removed`. Delete each completed ProjectWorkspace and wait for deletion while the controller is still running. Its cleanup finalizer needs the controller to verify revocation and storage removal. Uninstalling the controller first can leave requests and the namespace stuck in Terminating. Do not force namespace finalization or remove request finalizers without independently verifying external revocation and owned storage/process removal.
+
+## Cluster configuration through Helm values
+
+The chart is the shared renderer for portable installations and private pilot
+manifests. Start with [custom-cluster-values.yaml](examples/custom-cluster-values.yaml)
+or the qualified [gVisor profile](examples/gvisor-values.yaml). Example image
+digests are placeholders. Configure your own registry references and qualified
+settings, then render for review:
+
+```sh
+helm template projects charts/agent-project-controller \
+  --namespace agent-project-controller --include-crds --values my-cluster.yaml
+```
+
+Set `config.RUNTIME_CLASS`, `config.STORAGE_CLASS` and `config.STORAGE_SIZE` to
+your provisioned runtime and Delete-reclaim storage. `config.CLUSTER_DOMAIN`,
+`config.DNS_SERVICE_NAMESPACE`, `config.DNS_SERVICE_NAME` and
+`config.DNS_DIRECT_ENDPOINTS` select the project DNS discovery strategy. The
+CoreDNS pod label and TCP/UDP port requirements still apply. These values do
+not install a runtime, provisioner or DNS service.
+
+Use `controllerScheduling`, `workspaceScheduling` and `proxyScheduling` for
+independent `nodeSelector`, `tolerations` and `affinity` settings. Workspace
+placement applies to the Sandbox pod and its clone init container. RuntimeClass
+scheduling constraints must also allow the selected nodes. Placement changes
+for existing projects retain the controller's drift protection; save work and
+follow the paused upgrade/recreation procedure rather than expecting a running
+workspace to move automatically.
+
+The controller defaults to `controllerDNS.policy: ClusterFirst`. For an explicit
+resolver, set `policy: None` and supply `controllerDNS.config.nameservers`, with
+optional searches and options. This controls only the controller pod. Projects
+continue to use the validated DNS discovery configuration above.
+
+`controllerImage`, `workspaceImage` and optional `proxyImage` accept complete
+registry/repository references with immutable SHA-256 digests. The proxy image
+defaults to the controller image. `controllerImagePullSecrets` accepts existing
+Secret names in the control namespace for controller image pulls. Project
+images must be accessible through node registry credentials or another
+operator-managed registry configuration. The controller does not copy registry
+credentials into project namespaces. Image pulls happen through the kubelet;
+project HTTPS egress permissions do not grant registry pull authentication.
+
+For an in-cluster Forgejo TLS backend, `proxyGateway.namespace`, `selector`,
+`port` and optional `disableSNIFilter` define the inspecting proxy's explicit
+backend exception. Leave `proxyGateway` empty if none is needed. The legacy
+`config.PROXY_GATEWAY_JSON` remains accepted, but cannot be combined with the
+structured setting. Keep SNI filtering enabled unless your qualified networking
+requires the documented exception. Worker access to the backend remains denied.
+
+Set `routing.enabled: true`, `routing.hostnames` and `routing.parentRefs` to
+render an HTTPRoute for an existing Gateway. This does not install a Gateway or
+configure its certificates. The Gateway must accept the route and cross-namespace
+attachment. Align the hostname with `config.PUBLIC_ORIGIN` and the OIDC callback.
+With routing disabled, expose the controller ClusterIP Service through your own
+ingress. Set your Forgejo origin, owner, public origin and OIDC values under
+`config`; there are no built-in private deployment hostnames.
+
+Set `namespace.create: true` when the rendered manifest should create the
+control namespace. `namespace.labels` defaults to restricted Pod Security
+Admission. Helm users may create and label the namespace separately. Inspect
+namespace ownership before adopting an existing installation.
+
+Values validation rejects unknown placement fields, invalid gateway ports,
+missing route destinations and `dnsPolicy: None` without a resolver. Runtime
+configuration also rejects malformed placement JSON. These controls preserve
+the isolation settings; configuring another cluster is not evidence that its
+runtime or networking has passed qualification.

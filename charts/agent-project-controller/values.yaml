@@ -42,3 +42,42 @@ controllerResources:
   limits:
     cpu: '1'
     memory: 512Mi
+
+# Pod placement for the trusted controller and each generated project workload.
+controllerScheduling:
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+workspaceScheduling:
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+proxyScheduling:
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+# Existing registry credentials in the control namespace, for the controller only.
+# Project images must be pullable using the worker nodes' registry configuration.
+controllerImagePullSecrets: []
+# ClusterFirst inherits the cluster resolver. Use None with explicit dnsConfig
+# only when required by the controller's own network environment.
+controllerDNS:
+  policy: ClusterFirst
+  config: {}
+# Optional explicit in-cluster TLS backend route for inspecting proxies.
+# namespace, selector, port and disableSNIFilter match the network provider API.
+# Leave empty when no backend gateway exception is needed.
+proxyGateway: {}
+# Expose the dashboard using an existing Gateway. No gateway is installed.
+# With enabled=false the chart installs only the controller ClusterIP Service.
+routing:
+  enabled: false
+  hostnames: []
+  parentRefs: []
+# Enable for a standalone rendered manifest that must create its namespace.
+# Helm installations can create the namespace separately.
+namespace:
+  create: false
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

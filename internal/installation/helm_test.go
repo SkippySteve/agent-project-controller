@@ -51,6 +51,50 @@ func TestHelmPackage(t *testing.T) {
 	if bytes.Contains(output, []byte("kind: Secret")) || bytes.Contains(output, []byte("name: API_SECRET_FILE")) {
 		t.Fatal("default chart creates credentials or enables automation API")
 	}
+	if bytes.Contains(output, []byte("kind: HTTPRoute")) {
+		t.Fatal("default chart requires a gateway")
+	}
+	values["controllerScheduling"] = map[string]any{"nodeSelector": map[string]string{"pool": "control"}}
+	values["workspaceScheduling"] = map[string]any{"nodeSelector": map[string]string{"pool": "agents"}}
+	values["proxyScheduling"] = map[string]any{"nodeSelector": map[string]string{"pool": "proxies"}}
+	values["controllerDNS"] = map[string]any{"policy": "None", "config": map[string]any{"nameservers": []string{"10.96.0.10"}}}
+	values["proxyGateway"] = map[string]any{"namespace": "edge", "selector": map[string]string{"app": "gateway"}, "port": 9443}
+	values["routing"] = map[string]any{"enabled": true, "hostnames": []string{"projects.example.com"}, "parentRefs": []map[string]string{{"name": "edge-gateway", "namespace": "edge"}}}
+	write()
+	output, err = render()
+	if err != nil {
+		t.Fatalf("custom cluster render: %v: %s", err, output)
+	}
+	for _, want := range []string{"kind: HTTPRoute", "name: edge-gateway", "projects.example.com", "pool: control", "dnsPolicy: \"None\"", "10.96.0.10", "WORKSPACE_SCHEDULING_JSON:", "PROXY_SCHEDULING_JSON:", `\"pool\":\"agents\"`, `\"port\":9443`} {
+		if !bytes.Contains(output, []byte(want)) {
+			t.Fatalf("custom values missing %s: %s", want, output)
+		}
+	}
+	for _, invalid := range []map[string]any{
+		{"workspaceScheduling": map[string]any{"hostNetwork": true}},
+		{"proxyGateway": map[string]any{"namespace": "edge", "selector": map[string]string{"app": "gateway"}, "port": 0}},
+		{"controllerDNS": map[string]any{"policy": "None", "config": map[string]any{}}},
+		{"routing": map[string]any{"enabled": true, "hostnames": []string{}, "parentRefs": []any{}}},
+	} {
+		saved := map[string]any{}
+		for key, value := range invalid {
+			saved[key] = values[key]
+			values[key] = value
+		}
+		write()
+		if _, err := render(); err == nil {
+			t.Fatalf("invalid cluster values accepted: %v", invalid)
+		}
+		for key, value := range saved {
+			values[key] = value
+		}
+	}
+	values["config"].(map[string]any)["PROXY_GATEWAY_JSON"] = `{"namespace":"other"}`
+	write()
+	if _, err := render(); err == nil {
+		t.Fatal("conflicting gateway configuration accepted")
+	}
+	delete(values["config"].(map[string]any), "PROXY_GATEWAY_JSON")
 	values["automationAPI"] = map[string]any{"enabled": true}
 	write()
 	output, err = render()
