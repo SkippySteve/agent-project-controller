@@ -80,6 +80,18 @@ func activeRecord() (*processRecord, error) {
 	return &record, nil
 }
 
+func launchLock(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		return nil, errors.New("T3 launch already in progress")
+	}
+	return file, nil
+}
+
 func Serve(instance string) error {
 	if len(instance) != 32 {
 		return errors.New("T3 launch instance required")
@@ -87,6 +99,11 @@ func Serve(instance string) error {
 	if err := ensureWorker(); err != nil {
 		return err
 	}
+	startupLock, err := launchLock(Data + "/launch.lock")
+	if err != nil {
+		return err
+	}
+	defer startupLock.Close() // close-on-exec releases the lock after the PID record is published.
 	if record, err := activeRecord(); err != nil {
 		return err
 	} else if record != nil {
