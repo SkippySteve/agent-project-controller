@@ -36,6 +36,8 @@ docker build -t registry.example.com/agent-project-controller:dev .
 docker push registry.example.com/agent-project-controller:dev
 ```
 
+The published alpha images can be used instead of that local build. Their digests are in [examples/alpha-values.yaml](examples/alpha-values.yaml) and on the [0.1.0-alpha.1 release](https://github.com/SkippySteve/agent-project-controller/releases/tag/0.1.0-alpha.1). Those images are commit `6d754c47f223edbe5bfff399405fb1450abb0c4b`. Workspace-image replacement and the experimental NetworkPolicy provider landed on `main` after that commit. A deployment that needs either behavior must build that later source and deploy the resulting digest.
+
 Prepare a Kustomize overlay over `config/deploy`. Set the controller Deployment image and `WORKSPACE_IMAGE` to the built digest. Replace example hosts, Forgejo owner, runtime class, storage class and OIDC settings. Set `CLUSTER_DOMAIN` if it differs from `cluster.local`. `WORKSPACE_IMAGE` is empty in the sample, so unconfigured installations fail rather than launching an arbitrary image.
 
 The controller discovers the address of `DNS_SERVICE_NAMESPACE` / `DNS_SERVICE_NAME`, default `kube-system` / `kube-dns`. The service must select CoreDNS pods labeled `k8s-app=kube-dns` and expose TCP and UDP port 53. Workers and proxies use `dnsPolicy: None`, that address and the configured cluster search domain. DNS policy still permits only the names required by each role. Invalid or missing resolver configuration blocks project grants.
@@ -162,10 +164,11 @@ Before uninstalling the Helm release, request removal of every project and wait 
 ## Cluster configuration through Helm values
 
 The chart is the shared renderer for portable installations and private pilot
-manifests. Start with [custom-cluster-values.yaml](examples/custom-cluster-values.yaml)
-or the qualified [gVisor profile](examples/gvisor-values.yaml). Example image
-digests are placeholders. Configure your own registry references and qualified
-settings, then render for review:
+manifests. [alpha-values.yaml](examples/alpha-values.yaml) pins the published
+`0.1.0-alpha.1` images. The qualified [gVisor profile](examples/gvisor-values.yaml)
+uses placeholder digests, and [custom-cluster-values.yaml](examples/custom-cluster-values.yaml)
+shows scheduling and routing fields. Replace Forgejo, origin and OIDC settings,
+then render for review:
 
 ```sh
 helm template projects charts/agent-project-controller \

@@ -2,7 +2,20 @@
 
 A Go controller that gives selected Forgejo repositories isolated project environments on Kubernetes Agent Sandbox. Open a project from the dashboard, work on a dedicated branch, then pause it or revoke access and remove its environment.
 
-An alpha pilot has run on a live Cilium and gVisor cluster with upstream Agent Sandbox. The qualified combination is Kubernetes 1.36.2, Agent Sandbox 1.0.4, Cilium 1.19.5, gVisor, Forgejo 15.0.9 and Authentik 2026.5.6. See [installation](docs/installation.md), [security boundaries](docs/security.md), [API](docs/api.md) and [qualification](docs/qualification.md) for the evidence and the remaining limits. Deploy digest-pinned images. The moving `:pilot` tag is not a release.
+## Published alpha
+
+Release [0.1.0-alpha.1](https://github.com/SkippySteve/agent-project-controller/releases/tag/0.1.0-alpha.1) is the public starting point. Download `agent-project-controller-0.1.0-alpha.1-linux-amd64` and `agent-project-controller-0.1.0-alpha.1.tgz`, then check them against `SHA256SUMS` from that release. The source archive does not contain container images.
+
+These images were built from commit `6d754c47f223edbe5bfff399405fb1450abb0c4b` and can be pulled without a token:
+
+- `ghcr.io/skippysteve/agent-project-controller@sha256:084fdfa09f04a279d6ea11bf168222e388f9f5230ddda38a62dcade5f9b9b9d3`
+- `ghcr.io/skippysteve/agent-project-workspace@sha256:caf59a3dac5b216aa670f02cc4db857cf7b214d346fc844722f7a7c602ba9892`
+
+Deploy those digests. The tags `0.1.0-alpha.1` and `6d754c47f223edbe5bfff399405fb1450abb0c4b` point at the same images. [docs/examples/alpha-values.yaml](docs/examples/alpha-values.yaml) is a Helm values file with those pins. Replace the Forgejo origin, owner, runtime class, storage class, public origin and OIDC client, and create the `controller-secrets` Secret yourself. The chart does not install Agent Sandbox, Cilium, gVisor, Forgejo or an identity provider.
+
+Current `main` also contains workspace-image replacement and an experimental standard NetworkPolicy provider. Neither behavior is in the `0.1.0-alpha.1` images. Rebuild from the commit you intend to run before relying on it. The NetworkPolicy provider is opt-in and is not a qualified dataplane. The qualified profile remains Cilium with gVisor.
+
+An alpha pilot has run on a live Cilium and gVisor cluster with upstream Agent Sandbox. The qualified combination is Kubernetes 1.36.2, Agent Sandbox 1.0.4, Cilium 1.19.5, gVisor, Forgejo 15.0.9 and Authentik 2026.5.6. See [installation](docs/installation.md), [security boundaries](docs/security.md), [API](docs/api.md) and [qualification](docs/qualification.md) for the evidence and the remaining limits. Deploy digest-pinned images. The moving `:pilot` tag is not the published release.
 
 The public source mirror is https://github.com/SkippySteve/agent-project-controller. It does not carry Forgejo issues or pull requests. Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
 
@@ -88,9 +101,9 @@ The core design permits other qualified network and Git-host providers, but thos
 
 Keep cluster addresses, storage classes, authentication settings and provider configuration outside reusable code. Do not copy private deployment secrets into this repository.
 
-Forgejo is the source repository. GitHub and GitLab can be added as push mirrors after destination repositories and credentials are configured. Git mirroring transfers repository history; issues, pull requests and host settings need separate migration or integration.
+The public source and the `0.1.0-alpha.1` release are on GitHub. Forgejo remains a private development remote and does not provide the public issue tracker. Copying Git history to another host does not copy issues, pull requests or host settings.
 
-Code is licensed under Apache-2.0. Before a public release, qualify the actual cluster's runtime isolation, Cilium bypass prevention, volume deletion, client trust and identity-provider integration end to end. Passing local qualification does not establish those properties in another deployment.
+Code is licensed under Apache-2.0. The published alpha records one Cilium and gVisor qualification. Another cluster still needs its own runtime isolation, bypass prevention, volume deletion, client trust and identity-provider checks. Passing that pilot does not establish those properties elsewhere.
 
 ## OIDC login
 
