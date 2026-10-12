@@ -34,6 +34,8 @@ Workspace resource defaults are a `500m` CPU and `512Mi` memory request with lim
 
 Resource profiles and resolver settings are immutable for already provisioned environments. Configuration changes apply to new projects. Existing projects report configuration drift and remain suspended rather than silently changing their security settings. Remove and recreate them after saving local work when changing these settings.
 
+The workspace image digest is the one template field that can move with the controller. Replacement waits until the worker pod is gone, deletes only the Sandbox, and the next reconcile creates the controller's pinned image on the same volume and Git identity. A Sandbox image changed to any other value is not adopted. While a worker pod still exists, that mutation suspends the project and leaves the Sandbox in place. Other Sandbox differences, including placement, stay drift as well.
+
 Create the control namespace, then supply a Secret named `controller-secrets` there. Use `--from-file` with protected files so credentials do not enter shell arguments or Git:
 
 ```sh
