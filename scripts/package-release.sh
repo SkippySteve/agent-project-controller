@@ -24,6 +24,8 @@ done
 helm package charts/agent-project-controller --version "$version" --app-version "$version" --destination dist
 # Dependency inventories accompany the binaries.
 go list -m -json all > "dist/agent-project-controller-${version}-go-modules.json"
+cp LICENSE dist/
+cp third_party/licenses/*.txt dist/
 cp scripts/model-access.py scripts/qualify-recovery.py scripts/requirements-recovery.txt dist/
 cat > "dist/agent-project-controller-${version}-source.json" <<META
 {"version":"$version","source_commit":"$revision","workspace_platform":"linux/amd64","t3_version":"0.0.45","codex_version":"0.159.0","release_stage":"alpha"}

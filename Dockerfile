@@ -50,5 +50,6 @@ RUN curl -fsSL https://github.com/pingdotgg/t3code/releases/download/v0.0.45/t3-
     && mkdir /opt/t3 && tar xzf /tmp/t3.tar.gz -C /opt/t3 --strip-components=1 \
     && rm /tmp/t3.tar.gz
 COPY scripts/apc-codex /usr/local/bin/apc-codex
+COPY third_party/licenses/ /usr/share/agent-project-controller/licenses/
 USER 1000:1000
 CMD ["controller"]
