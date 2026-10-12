@@ -357,6 +357,46 @@
           }
         }
       ]
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "NETWORK_PROVIDER": {
+          "enum": ["cilium", "network-policy"]
+        },
+        "NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED": {
+          "enum": ["true", "false"]
+        },
+        "NETWORK_POLICY_CLUSTER_CIDRS_JSON": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "NETWORK_PROVIDER": {
+                "const": "network-policy"
+              }
+            },
+            "required": ["NETWORK_PROVIDER"]
+          },
+          "then": {
+            "required": [
+              "NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED",
+              "NETWORK_POLICY_CLUSTER_CIDRS_JSON"
+            ],
+            "properties": {
+              "NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED": {
+                "const": "true"
+              },
+              "NETWORK_POLICY_CLUSTER_CIDRS_JSON": {
+                "minLength": 2
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

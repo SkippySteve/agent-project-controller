@@ -57,6 +57,23 @@ Use disposable namespaces and repositories. Do not remove or replace an existing
 
 Results must identify image digests and exact Kubernetes, Agent Sandbox, Cilium, runtime, Forgejo, DNS, storage and identity-provider versions. A CRD's presence or a successful manifest apply is not qualification.
 
+## Experimental NetworkPolicy procedure
+
+This procedure is required before anyone relies on `NETWORK_PROVIDER=network-policy`. No non-Cilium dataplane run is recorded here. Passing unit tests, Helm rendering, preflight, or the Kubernetes API server does not satisfy it.
+
+Use a disposable cluster whose CNI enforces standard NetworkPolicy and does not depend on Cilium. Keep the acknowledgement unset until the checks below pass, then set `NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED=true` and supply every pod, service, and node prefix in `NETWORK_POLICY_CLUSTER_CIDRS_JSON`.
+
+1. Confirm preflight `network-policy-dns` fails when a node, pod CIDR, CoreDNS, or API address falls outside those prefixes, then passes when the list is complete.
+2. On a Running project, confirm the proxy Service has an allocated unicast ClusterIP and the worker's `/etc/hosts` maps `proxy` only to that address. Confirm the worker has no DNS egress and cannot resolve or dial any other name.
+3. Confirm worker egress to public addresses, the gateway, CoreDNS, another project's proxy, and the Kubernetes API fails. Confirm proxy ingress accepts only its own worker on TCP 3128.
+4. Confirm the proxy can reach only approved HTTPS destinations on TCP 443, CoreDNS on TCP and UDP 53, and an explicit gateway peer when configured. Confirm reserved, private, and declared cluster prefixes are unreachable from the proxy, including node IPs, pod IPs, service IPs, and link-local metadata.
+5. Add a second NetworkPolicy in the project namespace that allows broader egress and confirm the workspace suspends. Remove a policy or widen a peer and confirm the same drift suspension.
+6. Confirm an explicit gateway with `disableSNIFilter` false is rejected, and with it true the proxy still applies host, method, and path rules. Qualify service translation: the packet that reaches the gateway must still match the configured pod selector after the CNI's NAT.
+7. Restart the controller and delete only the worker pod. Confirm the volume, Git identity, and host alias remain. Switching the provider on that same workspace must suspend it and leave the existing Service and policies unchanged.
+8. Record the CNI name and version, Kubernetes version, and the exact prefixes. A cluster that accepts the NetworkPolicy API and then ignores it fails this procedure.
+
+Until that record exists, keep new projects on the qualified Cilium profile.
+
 ## Alpha pilot observations
 
 A disposable Linux amd64 pilot exercised Kubernetes 1.36.2, upstream Agent

@@ -30,8 +30,10 @@ credentials are included. Authenticate through an independently provisioned
 identity or an operator-controlled access-only bridge. Never copy an existing
 owner's refresh credential into a project image or workspace.
 
-The proxy Service is headless so workers connect directly to the selected
-proxy pod. If your sandbox runtime bypasses Cilium's socket service translation,
+The qualified proxy Service is headless so workers connect directly to the selected
+proxy pod. The experimental NetworkPolicy profile allocates a ClusterIP instead
+and publishes it only through a worker host alias. That profile is described in
+[installation](installation.md) and is not a qualified deployment. If your sandbox runtime bypasses Cilium's socket service translation,
 set `DNS_DIRECT_ENDPOINTS=true`. The provider discovers up to three ready
 CoreDNS EndpointSlices and verifies every chosen address against its referenced
 CoreDNS pod. DNS policy still selects only CoreDNS pods and permits the same

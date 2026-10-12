@@ -2,14 +2,18 @@ package controller
 
 import (
 	"context"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
+	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/network"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	ext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -138,5 +142,140 @@ func TestProvisioningWithAPIDefaults(t *testing.T) {
 	}
 	if len(trust.Data) != 1 {
 		t.Fatal("private inspection key exposed to worker")
+	}
+}
+
+func TestNetworkPolicyAPIDefaults(t *testing.T) {
+	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		t.Skip("set KUBEBUILDER_ASSETS for local API server qualification")
+	}
+	unknown := true
+	crd := func(group, kind, plural string) *ext.CustomResourceDefinition {
+		return &ext.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: plural + "." + group}, Spec: ext.CustomResourceDefinitionSpec{Group: group, Scope: ext.NamespaceScoped, Names: ext.CustomResourceDefinitionNames{Kind: kind, Plural: plural}, Versions: []ext.CustomResourceDefinitionVersion{{Name: "v1beta1", Served: true, Storage: true, Schema: &ext.CustomResourceValidation{OpenAPIV3Schema: &ext.JSONSchemaProps{Type: "object", XPreserveUnknownFields: &unknown}}}}}}
+	}
+	cilium := crd("cilium.io", "CiliumNetworkPolicy", "ciliumnetworkpolicies")
+	cilium.Spec.Versions[0].Name = "v2"
+	env := &envtest.Environment{CRDDirectoryPaths: []string{filepath.Join("..", "..", "config", "crd"), filepath.Join("testdata", "agent-sandbox-v1.0.4")}, CRDs: []*ext.CustomResourceDefinition{cilium}}
+	cfg, err := env.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := env.Stop(); err != nil {
+			t.Error(err)
+		}
+	}()
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = api.AddToScheme(scheme)
+	c, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	if err = c.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "control"}}); err != nil {
+		t.Fatal(err)
+	}
+	policy := corev1.PersistentVolumeReclaimDelete
+	if err = c.Create(ctx, &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "delete"}, Provisioner: "fixture", ReclaimPolicy: &policy}); err != nil {
+		t.Fatal(err)
+	}
+	newWorkspace := func(name string) *api.ProjectWorkspace {
+		t.Helper()
+		w := &api.ProjectWorkspace{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "control"}, Spec: api.WorkspaceSpec{Repository: "steve/project", DesiredState: "Running"}}
+		if err := c.Create(ctx, w); err != nil {
+			t.Fatal(err)
+		}
+		return w
+	}
+	reconciler := func(provider network.Provider) *Reconciler {
+		return &Reconciler{Client: c, Host: &host{}, Network: provider, Config: Config{Namespace: "control", Owner: "steve", ForgejoOrigin: "https://git.example.com", Image: "example.com/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RuntimeClass: "gvisor", StorageClass: "delete", StorageSize: "1Gi"}}
+	}
+	ciliumWorkspace := newWorkspace("cilium-project")
+	ciliumReconciler := reconciler(provider{})
+	if err = ciliumReconciler.ensure(ctx, ciliumWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	native := reconciler(serviceProxy{})
+	native.Client = c
+	if err = native.ensure(ctx, ciliumWorkspace); err == nil || !strings.Contains(err.Error(), "proxy service drift") {
+		t.Fatal(err)
+	}
+	var migrated corev1.Service
+	if err = c.Get(ctx, types.NamespacedName{Namespace: namespace(ciliumWorkspace), Name: "proxy"}, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Spec.ClusterIP != corev1.ClusterIPNone {
+		t.Fatal("API migration rewrote the headless proxy")
+	}
+
+	w := newWorkspace("native-project")
+	r := reconciler(serviceProxy{})
+	if err = r.ensure(ctx, w); err != nil {
+		t.Fatal("native provisioning", err)
+	}
+	if err = r.ensure(ctx, w); err != nil {
+		t.Fatal("native retry", err)
+	}
+	var service corev1.Service
+	if err = c.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "proxy"}, &service); err != nil {
+		t.Fatal(err)
+	}
+	address, err := netip.ParseAddr(service.Spec.ClusterIP)
+	if err != nil || !address.IsGlobalUnicast() || service.Spec.ClusterIP == corev1.ClusterIPNone {
+		t.Fatal("API server did not allocate a proxy ClusterIP", service.Spec.ClusterIP)
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(sandboxGVK)
+	if err = c.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "project"}, u); err != nil {
+		t.Fatal(err)
+	}
+	aliases, found, err := unstructured.NestedSlice(u.Object, "spec", "podTemplate", "spec", "hostAliases")
+	if err != nil || !found || len(aliases) != 1 || aliases[0].(map[string]any)["ip"] != address.String() {
+		t.Fatalf("upstream schema host alias = %#v (%v)", aliases, err)
+	}
+	var worker networkingv1.NetworkPolicy
+	if err = c.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "worker"}, &worker); err != nil {
+		t.Fatal(err)
+	}
+	if len(worker.Spec.Ingress) != 0 || len(worker.Spec.Egress) != 1 {
+		t.Fatal("API defaulting widened worker policy")
+	}
+	var pvc corev1.PersistentVolumeClaim
+	if err = c.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "workspace"}, &pvc); err != nil {
+		t.Fatal(err)
+	}
+	extra := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "wide", Namespace: namespace(w)}, Spec: networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}, PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}, Egress: []networkingv1.NetworkPolicyEgressRule{{}}}}
+	if err = c.Create(ctx, extra); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.ensure(ctx, w); err == nil || !strings.Contains(err.Error(), "additional network policy") {
+		t.Fatal(err)
+	}
+	if err = c.Delete(ctx, extra); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.ensure(ctx, w); err != nil {
+		t.Fatal("retry after removing extra policy", err)
+	}
+	var again corev1.PersistentVolumeClaim
+	if err = c.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "workspace"}, &again); err != nil || again.UID != pvc.UID {
+		t.Fatal("policy retry replaced the volume", err)
+	}
+	w.Spec.DesiredState = "Removed"
+	w.Generation = 2
+	if err = c.Update(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.remove(ctx, w); err == nil || !strings.Contains(err.Error(), "waiting for namespace") {
+		t.Fatal(err)
+	}
+	var removing corev1.Namespace
+	if err = c.Get(ctx, types.NamespacedName{Name: namespace(w)}, &removing); err != nil {
+		t.Fatal(err)
+	}
+	if removing.DeletionTimestamp.IsZero() || r.Host.(*host).revokeCalls == 0 {
+		t.Fatal("native removal did not revoke access and mark the namespace for deletion")
 	}
 }

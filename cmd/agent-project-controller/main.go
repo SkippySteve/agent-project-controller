@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -150,20 +149,8 @@ func run(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	networkProvider := network.Cilium{ClusterDomain: env("CLUSTER_DOMAIN", "cluster.local"), DNSNamespace: env("DNS_SERVICE_NAMESPACE", "kube-system"), DNSService: env("DNS_SERVICE_NAME", "kube-dns"), DirectDNS: os.Getenv("DNS_DIRECT_ENDPOINTS") == "true"}
-	if raw := os.Getenv("PROXY_GATEWAY_JSON"); raw != "" {
-		decoder := json.NewDecoder(strings.NewReader(raw))
-		decoder.DisallowUnknownFields()
-		var gateway network.Gateway
-		if e := decoder.Decode(&gateway); e != nil {
-			return errors.New("invalid proxy gateway configuration")
-		}
-		if decoder.Decode(new(any)) != io.EOF {
-			return errors.New("invalid trailing proxy gateway configuration")
-		}
-		networkProvider.Gateway = &gateway
-	}
-	if e := networkProvider.Validate(); e != nil {
+	networkProvider, e := network.FromEnvironment()
+	if e != nil {
 		return e
 	}
 	workerScheduling, e := controller.ParseScheduling(os.Getenv("WORKSPACE_SCHEDULING_JSON"))

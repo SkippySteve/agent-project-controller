@@ -1,0 +1,21 @@
+# Experimental rendering example. This is not a qualified dataplane.
+# Set NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED to true only after the procedure
+# in docs/qualification.md has passed on the target CNI. Replace every prefix
+# with that cluster's complete pod, service, and node ranges.
+controllerImage: registry.example.org/controller@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+workspaceImage: registry.example.org/workspace@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+config:
+  NETWORK_PROVIDER: network-policy
+  NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED: "true"
+  NETWORK_POLICY_CLUSTER_CIDRS_JSON: '["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","fd00::/8"]'
+  FORGEJO_ORIGIN: https://git.example.org
+  FORGEJO_OWNER: team
+  PUBLIC_ORIGIN: https://projects.example.org
+  OIDC_ISSUER: https://identity.example.org/realm
+  OIDC_CLIENT_ID: projects
+proxyGateway:
+  namespace: edge
+  selector:
+    app: https-gateway
+  port: 9443
+  disableSNIFilter: true

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/proxy"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -664,7 +666,7 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 		}
 	case *corev1.Service:
 		actual := existing.(*corev1.Service)
-		if actual.Spec.ClusterIP != expected.Spec.ClusterIP || !contains(actual.Spec.Selector, expected.Spec.Selector) || !contains(actual.Spec.Ports, expected.Spec.Ports) || actual.Spec.Type != corev1.ServiceTypeClusterIP && actual.Spec.Type != "" {
+		if expected.Spec.ClusterIP != "" && actual.Spec.ClusterIP != expected.Spec.ClusterIP || expected.Spec.ClusterIP == "" && (actual.Spec.ClusterIP == "" || actual.Spec.ClusterIP == corev1.ClusterIPNone) || !contains(actual.Spec.Selector, expected.Spec.Selector) || !contains(actual.Spec.Ports, expected.Spec.Ports) || actual.Spec.Type != corev1.ServiceTypeClusterIP && actual.Spec.Type != "" {
 			return errors.New("proxy service drift detected")
 		}
 	}
@@ -1018,7 +1020,27 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 		&corev1.ConfigMap{ObjectMeta: metadata(w, "trust"), Data: map[string]string{"ca.crt": string(s.Data["ca.crt"])}},
 		&corev1.ConfigMap{ObjectMeta: metadata(w, "proxy-policy"), Data: map[string]string{"policy.json": string(raw)}},
 		&corev1.PersistentVolumeClaim{ObjectMeta: metadata(w, "workspace"), Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &r.Config.StorageClass, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(r.Config.StorageSize)}}}},
-		&corev1.Service{ObjectMeta: metadata(w, "proxy"), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone, Selector: map[string]string{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": "proxy"}, Ports: []corev1.ServicePort{{Port: 3128, TargetPort: fromInt(3128), Protocol: corev1.ProtocolTCP}}}})
+	)
+	proxyService := &corev1.Service{ObjectMeta: metadata(w, "proxy"), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone, Selector: map[string]string{api.OwnerLabel: string(w.UID), "projects.agentwork.dev/role": "proxy"}, Ports: []corev1.ServicePort{{Port: 3128, TargetPort: fromInt(3128), Protocol: corev1.ProtocolTCP}}}}
+	serviceProxy := r.Network.Capabilities().ServiceProxy
+	if serviceProxy {
+		proxyService.Spec.ClusterIP = ""
+	}
+	if e := r.apply(ctx, w, proxyService); e != nil {
+		return e
+	}
+	proxyAddress := ""
+	if serviceProxy {
+		var allocated corev1.Service
+		if e := r.Get(ctx, client.ObjectKeyFromObject(proxyService), &allocated); e != nil {
+			return e
+		}
+		address, e := netip.ParseAddr(allocated.Spec.ClusterIP)
+		if e != nil || !address.IsGlobalUnicast() {
+			return errors.New("proxy requires an allocated unicast ClusterIP")
+		}
+		proxyAddress = address.String()
+	}
 	security := &corev1.SecurityContext{Privileged: boolp(false), RunAsNonRoot: boolp(true), RunAsUser: int64p(1000), RunAsGroup: int64p(1000), AllowPrivilegeEscalation: boolp(false), ReadOnlyRootFilesystem: boolp(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
 	plabels := labels(w)
 	plabels["projects.agentwork.dev/role"] = "proxy"
@@ -1031,6 +1053,9 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 	workerlabels := labels(w)
 	workerlabels["projects.agentwork.dev/role"] = "worker"
 	spec := corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, RuntimeClassName: &r.Config.RuntimeClass, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(5), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolp(true), RunAsUser: int64p(1000), RunAsGroup: int64p(1000), FSGroup: int64p(1000)}, InitContainers: []corev1.Container{{Name: "clone", Image: r.Config.Image, Args: []string{"bootstrap"}, Env: env, SecurityContext: security, Resources: workerResources, VolumeMounts: mounts}}, Containers: []corev1.Container{{Name: "workspace", Image: r.Config.Image, Command: []string{"/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"}, Env: env, WorkingDir: "/workspace/repo", SecurityContext: security, Resources: workerResources, VolumeMounts: mounts, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"test", "-f", "/workspace/.ready"}}}}}}, Volumes: []corev1.Volume{{Name: "workspace", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "workspace"}}}, {Name: "identity", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "git-identity", DefaultMode: int32p(0440)}}}, {Name: "trust", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "trust"}}}}, {Name: "model", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "model-access", Optional: boolp(true), DefaultMode: int32p(0440)}}}, {Name: "scratch", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}}
+	if serviceProxy {
+		spec.HostAliases = []corev1.HostAlias{{IP: proxyAddress, Hostnames: []string{"proxy"}}}
+	}
 	r.Config.WorkerScheduling.Apply(&spec)
 	b, e := json.Marshal(spec)
 	if e != nil {
@@ -1049,6 +1074,34 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 		if e = r.apply(ctx, w, obj); e != nil {
 			return e
 		}
+	}
+	// Standard NetworkPolicy is additive. An extra allow in the project
+	// namespace would widen worker or proxy access, so the native provider
+	// accepts only its own two policies. Cluster-scoped policy is outside
+	// this check and still requires dataplane qualification.
+	if serviceProxy {
+		if e = r.rejectExtraNetworkPolicies(ctx, w); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+func (r *Reconciler) rejectExtraNetworkPolicies(ctx context.Context, w *api.ProjectWorkspace) error {
+	var list networkingv1.NetworkPolicyList
+	if e := r.List(ctx, &list, client.InNamespace(namespace(w))); e != nil {
+		return e
+	}
+	seen := map[string]bool{}
+	for i := range list.Items {
+		item := &list.Items[i]
+		name := item.Name
+		if item.Labels[api.OwnerLabel] != string(w.UID) || (name != "worker" && name != "proxy") {
+			return errors.New("additional network policy detected")
+		}
+		seen[name] = true
+	}
+	if len(list.Items) != 2 || !seen["worker"] || !seen["proxy"] {
+		return errors.New("additional network policy detected")
 	}
 	return nil
 }
