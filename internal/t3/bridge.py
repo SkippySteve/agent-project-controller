@@ -20,6 +20,7 @@ class RPC:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, bufsize=1, env=env, start_new_session=True)
         self.messages = queue.Queue()
+        self.write_lock = threading.Lock()
         self.next_id = 0
         self.delta_count = 0
         self.completed_commands = 0
@@ -42,8 +43,9 @@ class RPC:
         threading.Thread(target=reader, daemon=True).start()
 
     def send(self, value):
-        self.process.stdin.write(json.dumps(value) + '\n')
-        self.process.stdin.flush()
+        with self.write_lock:
+            self.process.stdin.write(json.dumps(value) + '\n')
+            self.process.stdin.flush()
 
     def receive(self, deadline):
         try:
@@ -88,11 +90,13 @@ class RPC:
             self.handle(message)
 
     def close(self):
-        os.killpg(self.process.pid, signal.SIGTERM)
+        try: os.killpg(self.process.pid, signal.SIGTERM)
+        except ProcessLookupError: pass
         try:
             self.process.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            os.killpg(self.process.pid, signal.SIGKILL)
+            try: os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
             self.process.wait()
 
 

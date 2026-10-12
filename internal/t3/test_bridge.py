@@ -1,6 +1,9 @@
 import importlib.util
 import json
 import tempfile
+import os
+import signal
+from unittest import mock
 from pathlib import Path
 import time
 import unittest
@@ -43,5 +46,21 @@ class BridgePolicy(unittest.TestCase):
             for value in ('0','NaN','Infinity'):
                 (root/'expires-at').write_text(value)
                 with self.assertRaises(ValueError):b.grant(root)
+
+class InterruptedRPC(unittest.TestCase):
+    def test_interruption_terminates_child_process_group(self):
+        rpc=b.RPC.__new__(b.RPC)
+        rpc.process=mock.Mock(pid=4321)
+        # Both the adapter and app-server descendants must stop on disconnect.
+        with mock.patch.object(b.os, 'killpg') as kill:
+            rpc.close()
+            kill.assert_called_once_with(4321, signal.SIGTERM)
+
+    def test_already_exited_child_cleanup_is_idempotent(self):
+        rpc=b.RPC.__new__(b.RPC)
+        rpc.process=mock.Mock(pid=4321)
+        with mock.patch.object(b.os, 'killpg', side_effect=ProcessLookupError):
+            rpc.close()
+        rpc.process.wait.assert_called_once_with(timeout=10)
 
 if __name__=='__main__':unittest.main()

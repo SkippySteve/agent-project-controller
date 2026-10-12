@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -101,6 +103,11 @@ func Launch(ctx context.Context, c client.Client, config *rest.Config, control, 
 	var pairing bytes.Buffer
 	var pairErr error
 	for i := 0; i < 30; i++ {
+		select {
+		case <-serverDone:
+			return errors.New("T3 server failed to start; stop any existing launcher first")
+		default:
+		}
 		pairing.Reset()
 		pairErr = connect.Exec(ctx, config, pod.Namespace, pod.Name, []string{Binary, "auth", "pairing", "create", "--base-dir", Data, "--base-url", "http://" + address, "--ttl", "10m", "--label", "Project operator", "--json"}, nil, &pairing, io.Discard, false)
 		if pairErr == nil {
@@ -114,6 +121,16 @@ func Launch(ctx context.Context, c client.Client, config *rest.Config, control, 
 	}
 	if pairErr != nil {
 		return errors.New("T3 pairing unavailable")
+	}
+	var link struct {
+		PairURL string `json:"pairUrl"`
+	}
+	if json.Unmarshal(pairing.Bytes(), &link) != nil {
+		return errors.New("invalid T3 pairing response")
+	}
+	u, err := url.Parse(link.PairURL)
+	if err != nil || u.Scheme != "http" || u.Host != address || u.User != nil {
+		return errors.New("invalid T3 pairing address")
 	}
 	directory, err := os.UserCacheDir()
 	if err != nil {

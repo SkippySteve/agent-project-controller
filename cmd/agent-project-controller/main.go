@@ -32,6 +32,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
+var version = "dev"
+var commit = "unknown"
+
 func env(k, fallback string) string {
 	v := os.Getenv(k)
 	if v == "" {
@@ -56,6 +59,8 @@ func secret(k string) (string, error) {
 func run(ctx context.Context) error {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "version", "--version":
+			return json.NewEncoder(os.Stdout).Encode(map[string]string{"version": version, "commit": commit})
 		case "t3":
 			if len(os.Args) != 3 {
 				return errors.New("usage: agent-project-controller t3 <workspace>")

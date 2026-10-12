@@ -82,7 +82,7 @@ The initial deployment profile requires:
 - Persistent volume provisioning with a documented retention and deletion policy. Snapshot and backup cleanup must be specified separately.
 - Installation permissions for this controller's CRDs and RBAC, authenticated dashboard/API access, and a secure configuration path for control-plane credentials.
 
-The core design permits other qualified network and Git-host providers, but those are not supported merely because an interface exists. Publish exact supported versions and end-to-end qualification results before release. OpenRig, Orca, T3, OTel export and remote mirrors are optional.
+The core design permits other qualified network and Git-host providers, but those are not supported merely because an interface exists. Publish exact supported versions and end-to-end qualification results before release. T3 is included in the alpha release scope. OpenRig, native Orca registration, OTel export and remote mirrors are optional. See [T3](docs/t3.md) and [release criteria](docs/release.md).
 
 ## Portability and release
 
