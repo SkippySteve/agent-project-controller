@@ -17,3 +17,7 @@ chart-check:
 	APC_HELM_TEST=true go test -count=1 ./internal/installation
 package: chart-check
 	helm package charts/agent-project-controller --destination dist
+
+.PHONY: release
+release:
+	VERSION=$(VERSION) bash scripts/package-release.sh
