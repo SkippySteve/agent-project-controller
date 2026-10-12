@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -144,6 +146,7 @@ func Launch(ctx context.Context, c client.Client, config *rest.Config, control, 
 	if err != nil {
 		return err
 	}
+	defer os.Remove(file.Name())
 	if err = file.Chmod(0600); err != nil {
 		file.Close()
 		return err
@@ -152,6 +155,24 @@ func Launch(ctx context.Context, c client.Client, config *rest.Config, control, 
 	file.Close()
 	if err != nil {
 		return err
+	}
+	if os.Getenv("APC_T3_NO_BROWSER") != "true" && (os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "") {
+		if opener, e := exec.LookPath("xdg-open"); e == nil {
+			page, e := os.CreateTemp(directory, "t3-open-*.html")
+			if e == nil {
+				defer os.Remove(page.Name())
+				_ = page.Chmod(0600)
+				_, e = fmt.Fprintf(page, "<!doctype html><meta http-equiv=refresh content=\"0;url=%s\">", html.EscapeString(link.PairURL))
+				page.Close()
+				if e == nil {
+					cmd := exec.Command(opener, page.Name())
+					cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+					if cmd.Start() == nil {
+						go cmd.Wait()
+					}
+				}
+			}
+		}
 	}
 	fmt.Fprintf(os.Stdout, "T3: http://%s\nOne-time pairing link saved in %s\nKeep this command running. Ctrl+C stops the server and tunnel.\n", address, file.Name())
 	select {
