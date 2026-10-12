@@ -20,6 +20,7 @@ import (
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/network"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/preflight"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/proxy"
+	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/t3"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/telemetry"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/web"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -55,6 +56,23 @@ func secret(k string) (string, error) {
 func run(ctx context.Context) error {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "t3":
+			if len(os.Args) != 3 {
+				return errors.New("usage: agent-project-controller t3 <workspace>")
+			}
+			return t3CLI(ctx, os.Args[2])
+		case "t3-serve":
+			if len(os.Args) != 3 {
+				return errors.New("T3 launch instance required")
+			}
+			return t3.Serve(os.Args[2])
+		case "t3-stop":
+			if len(os.Args) != 3 {
+				return errors.New("T3 launch instance required")
+			}
+			return t3.Stop(os.Args[2])
+		case "t3-codex":
+			return t3.Codex(os.Args[2:])
 		case "bootstrap":
 			return bootstrap.Run(ctx)
 		case "credential":
@@ -188,6 +206,22 @@ func run(ctx context.Context) error {
 	_ = httpServer.Shutdown(c)
 	return e
 }
+func t3CLI(ctx context.Context, workspace string) error {
+	config := ctrl.GetConfigOrDie()
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return err
+	}
+	if err := api.AddToScheme(scheme); err != nil {
+		return err
+	}
+	c, err := client.New(config, client.Options{Scheme: scheme})
+	if err != nil {
+		return err
+	}
+	return t3.Launch(ctx, c, config, env("CONTROL_NAMESPACE", "agent-project-controller"), workspace)
+}
+
 func connectCLI(ctx context.Context, workspace string, command []string) error {
 	config := ctrl.GetConfigOrDie()
 	scheme := runtime.NewScheme()

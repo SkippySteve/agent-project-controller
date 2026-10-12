@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/local/bin/agent-project-controller t3-codex "$@"
