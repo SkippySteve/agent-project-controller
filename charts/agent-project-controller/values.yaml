@@ -34,6 +34,10 @@ config:
   PROXY_MEMORY_REQUEST: 128Mi
   PROXY_CPU_LIMIT: '1'
   PROXY_MEMORY_LIMIT: 512Mi
+  # Optional trusted backend for pre-existing sandbox controls in the same app.
+  SANDBOX_CONTROL_URL: ''
+  SANDBOX_CONTROL_ORIGIN: ''
+  SANDBOX_CONTROL_OPERATOR: ''
   PUBLIC_ORIGIN: ''
   OIDC_ISSUER: ''
   OIDC_CLIENT_ID: ''

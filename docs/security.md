@@ -10,7 +10,7 @@ Each workspace gets a unique non-admin Forgejo user and repository-scoped token.
 
 OIDC login requires a verified token and an explicit operator allowlist. Operators share one administration boundary. Email addresses and proxy-injected identity headers do not confer authority. Group changes at the identity provider take effect on the next login; existing application sessions expire within 15 minutes. Local sign-out does not terminate the provider's own session. Login transaction and application sessions live in memory, so rolling multi-replica OIDC operation is unsupported.
 
-API mutations from browser credentials require the configured Origin and JSON content type. Automation bearer credentials are independently configured and have operator-level authority. They are not OIDC machine tokens or project credentials.
+Project API mutations from browser credentials require the configured Origin and JSON content type. The optional existing-sandbox section accepts the backend's bounded POST forms after the same console authentication and Origin check, and retains its signed CSRF cookie and form token. See [console integration](console.md) for explicit delegation and the required trusted backend network boundary. Automation bearer credentials are independently configured and have operator-level authority. They are not OIDC machine tokens or project credentials.
 
 Requested-by identity is copied into immutable audit records. Kubernetes clients can supply that annotation themselves, so it is attribution from the submitted request, not cryptographic proof of the Kubernetes caller. Use Kubernetes API audit logs for direct-client attribution. The controller's own broad RBAC and cluster administrators can delete audit objects; export or back them up if independent audit retention is required.
 
@@ -54,7 +54,7 @@ GitHub removal deletes the stored installation token and reads the repository ag
 
 After verified cleanup the controller removes stored token, password and private CA material, keeping a small revoked tombstone. Disabled Forgejo users preserve PR attribution and are intentionally retained. Immutable audit records have separate retention. Removing a project does not delete the original Forgejo repository or its branches and PRs.
 
-Pause stops the worker but preserves repository credentials and files. It is not revocation. Removal is terminal; regranting access requires a new workspace and identity. Requests are asynchronous: only an observed `Removed` state confirms this controller's cleanup checks finished.
+Pause stops the worker and inspecting proxy but preserves repository credentials and files. HTTPS access changes require all their pods to be gone and the project to remain paused until the controller records the new policy. It is not revocation. Removal is terminal; regranting access requires a new workspace and identity. Requests are asynchronous: only an observed `Removed` state confirms this controller's cleanup checks finished.
 
 Volume and namespace deletion are infrastructure checks, not proof of physical secure erasure. Snapshots, backups, external resources and information already copied elsewhere are outside automatic cleanup. Restrict these separately and use encryption or storage-specific erasure where required.
 

@@ -106,7 +106,7 @@ Inspection is an HTTP CONNECT to port 443. The proxy then inspects the negotiate
 
 ## Using a project
 
-Sign in, select a repository and enter a project name. The dashboard can also select the reviewed package registries `go`, `npm`, `python` and `rust`. Each selection allows GET and HEAD for the whole host, including the redirect hosts below. It does not approve package versions, and lockfiles are not read. The resulting HTTPS rules are immutable.
+Sign in, select a repository and enter a project name. The dashboard can also select the reviewed package registries `go`, `npm`, `python` and `rust`. Each selection allows GET and HEAD for the whole host, including the redirect hosts below. It does not approve package versions, and lockfiles are not read. The resulting HTTPS rules can be changed through Access and egress while the project is paused.
 
 | Selection | Hosts |
 | --- | --- |
@@ -123,7 +123,7 @@ The repository is cloned into `/workspace/repo`. Home, caches and configuration 
 
 Model credentials stay out of the image. Create a Secret named `model-access` in the project namespace when a tool needs them. The worker mounts it read-only at `/run/model` and tolerates its absence. The controller rejects that Secret when it contains a refresh token, and it never copies an owner refresh token into the image or the Secret. `agent-project-controller exec <workspace> -- <command>` runs one command in the workspace for a tool that can start a local process.
 
-Add any other HTTPS destinations at project creation through the API or custom resource. The initial policy is immutable: broadening it requires a new environment. Extra host access is never inferred from package files. Package registries often redirect to additional hosts, which must be explicitly authorized. List every host before creation.
+Add other HTTPS destinations through the dashboard, API or custom resource at project creation, or through a paused access update afterward. Extra host access is never inferred from package files. Package registries often redirect to additional hosts, which must be explicitly authorized. See [the combined console workflow](console.md) for editing access and including existing sandboxes.
 
 ## Optional telemetry
 

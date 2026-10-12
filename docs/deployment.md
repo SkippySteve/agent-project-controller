@@ -18,7 +18,7 @@ CoreDNS queries for their proxy and TCP access to their own proxy. Upstream TLS
 verification and proxy host, method and path checks still apply. Qualify service
 translation and direct-worker denials against your installed Cilium dataplane.
 Changing this operator configuration requires removing and recreating existing
-workspaces because their enforced network policies are immutable.
+workspaces because gateway provider configuration is not a project access edit. Optional HTTPS grants can be changed through the paused [console access workflow](console.md).
 
 ## Optional coding image
 

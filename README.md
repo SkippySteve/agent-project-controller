@@ -27,9 +27,12 @@ Upstream: https://github.com/kubernetes-sigs/agent-sandbox
 
 Agent Sandbox manages the sandbox workloads and supported lifecycle operations. This project coordinates repository authorization, credentials, cloning, project readiness, revocation and cleanup. The configured runtime, such as gVisor or Kata, provides workload isolation.
 
+See [the combined console](docs/console.md) for preparation diagnostics, project
+egress controls and integration of existing shared/provider sandboxes.
+
 ## Intended workflow
 
-1. An authorized user selects a repository and requests a project environment.
+1. An authorized user selects a repository and requests a project environment through the combined project and sandbox console.
 2. The controller grants repository access and provisions narrowly scoped credentials.
 3. It requests a Sandbox, prepares storage and clones the project.
 4. A dashboard or API client receives readiness. A Ready workspace is entered with `kubectl exec` into the `workspace` container, `agent-project-controller connect`, or `agent-project-controller exec <name> -- <command>`.
@@ -40,7 +43,7 @@ Pause preserves project data. Removal has an explicit retention policy. A failed
 ## Backend design
 
 - Implement the control backend in Go using Kubernetes controller conventions.
-- The ProjectWorkspace custom resource records repository, immutable HTTPS policy and desired lifecycle. This is this project's API, not an upstream Agent Sandbox resource.
+- The ProjectWorkspace custom resource records repository, paused-editable HTTPS policy and desired lifecycle. This is this project's API, not an upstream Agent Sandbox resource.
 - Start with core Sandbox resources. Add optional upstream templates, claims or warm pools only when needed.
 - Build a documented HTTP API with a small dashboard as one client.
 - Forgejo and GitHub share one Git-host interface. A controller process selects one of them. GitHub is optional and is not the qualified profile.

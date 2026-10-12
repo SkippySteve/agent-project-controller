@@ -54,6 +54,18 @@ func TestHelmPackage(t *testing.T) {
 	if bytes.Contains(output, []byte("kind: HTTPRoute")) {
 		t.Fatal("default chart requires a gateway")
 	}
+	config := values["config"].(map[string]any)
+	config["SANDBOX_CONTROL_URL"] = "http://sandbox-control.sandbox-system.svc:8080"
+	write()
+	if output, err = render(); err == nil {
+		t.Fatal("partial sandbox integration accepted", string(output))
+	}
+	config["SANDBOX_CONTROL_ORIGIN"] = "https://sandboxes.example.com"
+	config["SANDBOX_CONTROL_OPERATOR"] = "operator"
+	write()
+	if output, err = render(); err != nil || !bytes.Contains(output, []byte(`SANDBOX_CONTROL_OPERATOR: "operator"`)) {
+		t.Fatal("sandbox integration not rendered", err, string(output))
+	}
 	values["controllerScheduling"] = map[string]any{"nodeSelector": map[string]string{"pool": "control"}}
 	values["workspaceScheduling"] = map[string]any{"nodeSelector": map[string]string{"pool": "agents"}}
 	values["proxyScheduling"] = map[string]any{"nodeSelector": map[string]string{"pool": "proxies"}}

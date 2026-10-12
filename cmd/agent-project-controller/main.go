@@ -222,7 +222,12 @@ func run(ctx context.Context) error {
 	if e = manager.AddReadyzCheck("readyz", healthz.Ping); e != nil {
 		return e
 	}
-	server := &web.Server{Client: direct, Host: host, Namespace: ns, Owner: owner, Password: password, Origin: os.Getenv("PUBLIC_ORIGIN"), AllowBasic: os.Getenv("ALLOW_STATIC_LOGIN") == "true"}
+	server := &web.Server{Client: direct, Host: host, Namespace: ns, Owner: owner, Password: password, Origin: os.Getenv("PUBLIC_ORIGIN"), GitHost: gitHost, GitOrigin: origin, AllowBasic: os.Getenv("ALLOW_STATIC_LOGIN") == "true"}
+	if os.Getenv("SANDBOX_CONTROL_URL") != "" {
+		server.SandboxControl = &web.SandboxControl{URL: os.Getenv("SANDBOX_CONTROL_URL"), Origin: os.Getenv("SANDBOX_CONTROL_ORIGIN"), Operator: os.Getenv("SANDBOX_CONTROL_OPERATOR")}
+	} else if os.Getenv("SANDBOX_CONTROL_ORIGIN") != "" || os.Getenv("SANDBOX_CONTROL_OPERATOR") != "" {
+		return errors.New("sandbox control integration requires URL, origin and delegated operator together")
+	}
 	if os.Getenv("OIDC_ISSUER") != "" {
 		clientSecret, err := secret("OIDC_CLIENT_SECRET_FILE")
 		if err != nil {
