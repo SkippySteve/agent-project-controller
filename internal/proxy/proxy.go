@@ -421,10 +421,23 @@ func (s *Server) serveHTTP2(ctx context.Context, conn net.Conn, host string) {
 				}
 			}
 			w.WriteHeader(res.StatusCode)
-			_, _ = io.Copy(w, io.LimitReader(res.Body, 128<<20))
+			_, _ = io.Copy(flushingWriter{w}, io.LimitReader(res.Body, 128<<20))
 		}),
 	})
 }
+
+// flushingWriter delivers each inspected response chunk without waiting for EOF.
+// This also makes downstream cancellation observable during an upstream stream.
+type flushingWriter struct{ http.ResponseWriter }
+
+func (w flushingWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if err == nil {
+		err = http.NewResponseController(w.ResponseWriter).Flush()
+	}
+	return n, err
+}
+
 func writeError(w io.Writer, status int, message string) {
 	res := http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(message)), ContentLength: int64(len(message)), Close: true}
 	_ = res.Write(w)

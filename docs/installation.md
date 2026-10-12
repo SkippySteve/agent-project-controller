@@ -142,3 +142,5 @@ pod is hardened; project namespaces additionally enforce restricted Pod Security
 Dashboard logout invalidates the local session and opens a signed-out page.
 It does not sign you out of the identity provider or your other applications.
 Select Sign in to start a new dashboard session.
+
+Before uninstalling the Helm release, request removal of every project and wait for `Removed`. Delete each completed ProjectWorkspace and wait for deletion while the controller is still running. Its cleanup finalizer needs the controller to verify revocation and storage removal. Uninstalling the controller first can leave requests and the namespace stuck in Terminating. Do not force namespace finalization or remove request finalizers without independently verifying external revocation and owned storage/process removal.

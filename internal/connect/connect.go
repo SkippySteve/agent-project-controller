@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
+	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -16,6 +18,15 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+//go:embed model.py
+var modelSession string
+
+// ModelCommand runs the manual client in the worker. Credentials never cross
+// the operator's terminal transport; the client reads the worker mount.
+func ModelCommand() []string {
+	return []string{"python3", "-c", modelSession}
+}
 
 // Command is the tool-independent shell command for a Ready workspace.
 // Orca, T3, and Roamgate can run it when they can start a local process.
@@ -44,6 +55,15 @@ func Pod(ctx context.Context, c client.Client, controlNamespace, workspace strin
 func Exec(ctx context.Context, config *rest.Config, namespace, pod string, command []string, in io.Reader, out, errOut io.Writer, tty bool) error {
 	if len(command) == 0 {
 		return errors.New("command required")
+	}
+	if tty {
+		if file, ok := in.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
+			state, err := term.MakeRaw(int(file.Fd()))
+			if err != nil {
+				return err
+			}
+			defer term.Restore(int(file.Fd()), state)
+		}
 	}
 	clientset, e := kubernetes.NewForConfig(config)
 	if e != nil {

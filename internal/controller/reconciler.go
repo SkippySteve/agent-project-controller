@@ -390,8 +390,10 @@ func (r *Reconciler) ensure(ctx context.Context, w *api.ProjectWorkspace) error 
 	if !ns.DeletionTimestamp.IsZero() {
 		return errors.New("project namespace is terminating")
 	}
-	if e = r.modelAccess(ctx, w); e != nil {
-		return e
+	if w.Spec.DesiredState != "Paused" {
+		if e = r.modelAccess(ctx, w); e != nil {
+			return e
+		}
 	}
 	if e = r.objects(ctx, w, s); e != nil {
 		return e
@@ -454,15 +456,35 @@ func (r *Reconciler) rotateCA(ctx context.Context, w *api.ProjectWorkspace, s *c
 	return nil
 }
 func (r *Reconciler) modelAccess(ctx context.Context, w *api.ProjectWorkspace) error {
+	ledger, e := r.state(ctx, w)
+	if e != nil {
+		return e
+	}
 	s := &corev1.Secret{}
-	e := r.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "model-access"}, s)
+	e = r.Get(ctx, types.NamespacedName{Namespace: namespace(w), Name: "model-access"}, s)
 	if apierrors.IsNotFound(e) {
+		if string(ledger.Data["model-access-required"]) == "true" {
+			return errors.New("model access was revoked; a valid operator grant is required")
+		}
 		return nil
 	}
 	if e != nil {
 		return e
 	}
-	return RejectRefreshMaterial(s.Data)
+	if e = owner(w, s); e != nil {
+		return e
+	}
+	if e = RejectRefreshMaterial(s.Data); e != nil {
+		return e
+	}
+	if string(ledger.Data["model-access-required"]) != "true" {
+		before := ledger.DeepCopy()
+		ledger.Data["model-access-required"] = []byte("true")
+		if e = r.Patch(ctx, ledger, client.MergeFrom(before)); e != nil {
+			return e
+		}
+	}
+	return nil
 }
 func (r *Reconciler) restartInspection(ctx context.Context, w *api.ProjectWorkspace) error {
 	for _, role := range []string{"worker", "proxy"} {

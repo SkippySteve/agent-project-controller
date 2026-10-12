@@ -68,6 +68,11 @@ func run(ctx context.Context) error {
 				return errors.New("usage: agent-project-controller connect <workspace>")
 			}
 			return connectCLI(ctx, os.Args[2], []string{"/bin/sh"})
+		case "model":
+			if len(os.Args) != 3 {
+				return errors.New("usage: agent-project-controller model <workspace>")
+			}
+			return connectCLI(ctx, os.Args[2], connect.ModelCommand())
 		case "exec":
 			if len(os.Args) < 5 || os.Args[3] != "--" {
 				return errors.New("usage: agent-project-controller exec <workspace> -- <command>")
@@ -205,11 +210,15 @@ func connectCLI(ctx context.Context, workspace string, command []string) error {
 	}
 	info, statErr := os.Stdin.Stat()
 	tty := statErr == nil && info.Mode()&os.ModeCharDevice != 0
-	line, e := connect.ExecCommand(pod.Namespace, pod.Name, command)
-	if e != nil {
-		return e
+	if len(command) == 3 && command[0] == "python3" && command[1] == "-c" {
+		fmt.Fprintf(os.Stderr, "Connecting to %s\n", workspace)
+	} else {
+		line, e := connect.ExecCommand(pod.Namespace, pod.Name, command)
+		if e != nil {
+			return e
+		}
+		fmt.Fprintf(os.Stderr, "%s\n", line)
 	}
-	fmt.Fprintf(os.Stderr, "%s\n", line)
 	return connect.Exec(ctx, config, pod.Namespace, pod.Name, command, os.Stdin, os.Stdout, os.Stderr, tty)
 }
 func main() {

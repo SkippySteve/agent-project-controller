@@ -34,7 +34,9 @@ RUN curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.159.0/c
 RUN curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.159.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex-cli.tar.gz \
     && echo '6e587a08cb39599816c598b07e17b4bcbf9d41b5c1c0793a4b632b6741e9cbc0  /tmp/codex-cli.tar.gz' | sha256sum -c - \
     && tar xzf /tmp/codex-cli.tar.gz -C /tmp \
-    && mv /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex \
+    && mv /tmp/codex-x86_64-unknown-linux-musl /opt/codex/bin/codex \
+    && ln -s /opt/codex/bin/codex /usr/local/bin/codex \
+    && ln -s /opt/codex/bin/codex-code-mode-host /usr/local/bin/codex-code-mode-host \
     && rm /tmp/codex-cli.tar.gz \
     && codex --version
 USER 1000:1000

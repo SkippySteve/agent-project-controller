@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInspectedTLSRequests(t *testing.T) {
@@ -151,5 +153,67 @@ func TestTransportFailureClassificationDoesNotExposeErrorText(t *testing.T) {
 	}
 	if failureKind(errors.New("http: ContentLength=12 with Body length 0")) != "body_length" {
 		t.Fatal("body length mismatch not classified")
+	}
+}
+
+func TestInspectedHTTP2StreamsBeforeUpstreamCompletes(t *testing.T) {
+	release := make(chan struct{})
+	canceled := make(chan struct{})
+	defer close(release)
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: first\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			close(canceled)
+		}
+	}))
+	defer upstream.Close()
+	cert, key, err := GenerateCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New(Config{Rules: []api.HTTPSRule{{Host: "model.example.com", Methods: []string{"POST"}, Paths: []string{"/responses"}}}}, cert, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamURL, _ := url.Parse(upstream.URL)
+	roots := x509.NewCertPool()
+	roots.AddCert(upstream.Certificate())
+	p.Transport.TLSClientConfig = &tls.Config{RootCAs: roots, ServerName: "example.com"}
+	p.Transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, upstreamURL.Host)
+	}
+	server := httptest.NewServer(p)
+	defer server.Close()
+	serverURL, _ := url.Parse(server.URL)
+	ca := x509.NewCertPool()
+	ca.AppendCertsFromPEM(cert)
+	transport := &http.Transport{Proxy: http.ProxyURL(serverURL), ForceAttemptHTTP2: true, TLSClientConfig: &tls.Config{RootCAs: ca, NextProtos: []string{"h2"}}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "POST", "https://model.example.com/responses", strings.NewReader("{}"))
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("stream headers were buffered: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 || res.ProtoMajor != 2 {
+		t.Fatalf("status %d protocol %s", res.StatusCode, res.Proto)
+	}
+	line, err := bufio.NewReader(res.Body).ReadString('\n')
+	if err != nil || line != "data: first\n" {
+		t.Fatalf("stream event was buffered: %q %v", line, err)
+	}
+	res.Body.Close()
+	cancel()
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("downstream cancellation did not stop the upstream stream")
 	}
 }

@@ -1,0 +1,9 @@
+# Disposable recovery qualification
+
+Install the optional operator dependencies in a private virtual environment using `scripts/requirements-recovery.txt`. They are unnecessary for the controller or worker runtime.
+
+The existing recovery script accepts only a workspace and repository beginning with `qualification-`. Its controller namespace must have no other active workspace. Use its `volume-marker` command to verify that a saved file survives a worker restart.
+
+For `ledger-roundtrip`, supply `--backup-key PATH` with a 32-byte random key in an owned mode 0600 regular file outside the repository. The script uses AES-GCM with a random nonce and authenticates the format header. It writes only encrypted ledger material to a mode 0600 temporary file, stops reconciliation, removes the disposable ledger, and verifies that cleanup remains incomplete. It restores decrypted material through Kubernetes stdin, waits for external revocation and owned namespace/storage removal, then deletes the temporary encrypted record. Failed or interrupted runs retain the encrypted record and attempt ledger restoration. Keep the key until recovery has been verified. Do not reuse this procedure against a real workspace: it deliberately removes the fixture.
+
+This test retains the original ProjectWorkspace UID and project storage until removal. Restoring a newly created ProjectWorkspace with the same name does not retain its UID. Ownership and namespace derivation therefore prevent a simple JSON import from qualifying recovery after loss of the control namespace. A complete supported recovery procedure must preserve that identity through control-plane recovery or implement and review an explicit identity migration. Volume backup/restore, external storage, retention, scheduled backups and full disaster recovery remain unfinished.

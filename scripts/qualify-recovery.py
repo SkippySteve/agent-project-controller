@@ -2,8 +2,8 @@
 """Disposable recovery checks for one qualification workspace.
 
 Refuses a workspace or repository whose name does not start with
-qualification-. Secret material is written to a mode 0600 file and is never
-printed. The script does not change CoreDNS, the broker, or any other
+qualification-. Secret material is encrypted with AES-GCM in a mode 0600 file and is never
+printed. The encryption key stays on the operator machine. The script does not change CoreDNS, the broker, or any other
 workspace. Forgejo itself is not stopped; revocation while Forgejo is
 unavailable is covered by the controller unit tests.
 """
@@ -88,19 +88,50 @@ def secret_document(namespace, secret_name):
     }
 
 
-def write_private(document):
-    fd, path = tempfile.mkstemp(prefix="apc-ledger-", suffix=".json")
-    os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
-    with os.fdopen(fd, "w") as handle:
-        json.dump(document, handle)
-    if stat.S_IMODE(os.stat(path).st_mode) != 0o600:
-        os.unlink(path)
-        raise SystemExit("ledger backup was not private")
+BACKUP_HEADER = b'APC-LEDGER-AESGCM-1\n'
+
+
+def private_key(path):
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+            raise SystemExit('backup key must be an owned mode 0600 regular file')
+        key = handle.read(33)
+    if len(key) != 32:
+        raise SystemExit('backup key must contain 32 random bytes')
+    return key
+
+
+def write_private(document, key_path):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce = os.urandom(12)
+    encrypted = BACKUP_HEADER + nonce + AESGCM(private_key(key_path)).encrypt(
+        nonce, json.dumps(document).encode(), BACKUP_HEADER)
+    fd, path = tempfile.mkstemp(prefix='apc-ledger-', suffix='.encrypted')
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(encrypted)
     return path
 
 
-def restore_ledger(path):
-    run(["apply", "-f", path])
+def decrypt_backup(path, key_path):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    raw = Path(path).read_bytes()
+    if len(raw) > 1048576 or not raw.startswith(BACKUP_HEADER):
+        raise ValueError('invalid encrypted backup')
+    body = raw[len(BACKUP_HEADER):]
+    return AESGCM(private_key(key_path)).decrypt(body[:12], body[12:], BACKUP_HEADER)
+
+
+def restore_ledger(path, key_path):
+    try:
+        document = decrypt_backup(path, key_path)
+    except Exception:
+        raise SystemExit('encrypted ledger authentication failed; nothing restored') from None
+    # Plaintext stays in memory and stdin. Server errors may repeat input.
+    result = run(['create', '-f', '-'], input_bytes=document, check=False)
+    if result.returncode:
+        raise SystemExit('ledger restoration failed; credentials withheld')
 
 
 def wait_until(namespace, name, predicate, timeout):
@@ -203,7 +234,7 @@ def command_ledger_roundtrip(args):
     obj = workspace(args.namespace, args.workspace)
     secret_name = identity(obj)
     ns = project_namespace(obj)
-    path = write_private(secret_document(args.namespace, secret_name))
+    path = write_private(secret_document(args.namespace, secret_name), args.backup_key)
     restored = False
     scaled_down = False
     try:
@@ -226,7 +257,7 @@ def command_ledger_roundtrip(args):
             raise SystemExit("namespace was deleted without the ledger")
         if run(["-n", ns, "get", "pvc", "workspace"], check=False).returncode != 0:
             raise SystemExit("volume was deleted without the ledger")
-        restore_ledger(path)
+        restore_ledger(path, args.backup_key)
         restored = True
 
         def removed(obj, phase, message):
@@ -238,16 +269,22 @@ def command_ledger_roundtrip(args):
             time.sleep(3)
         if run(["get", "namespace", ns], check=False).returncode == 0:
             raise SystemExit("removed workspace kept its namespace")
-    except SystemExit:
+        # Clear the request finalizer while its controller is still running.
+        run(["-n", args.namespace, "delete", "projectworkspace", args.workspace, "--wait=true", "--timeout=45s"])
+        recovery_complete = True
+    except BaseException:
         if scaled_down:
             run(["-n", args.namespace, "scale", "deploy/controller", "--replicas=1"], check=False)
         if not restored and os.path.exists(path):
-            restore_ledger(path)
+            restore_ledger(path, args.backup_key)
             sys.stderr.write(f"restored ledger for {args.workspace} from private backup\n")
         raise
     finally:
-        if os.path.exists(path):
+        # Retain the encrypted recovery record after any interrupted failure.
+        if restored and locals().get("recovery_complete", False):
             os.unlink(path)
+        elif os.path.exists(path):
+            sys.stderr.write(f"encrypted recovery record retained at {path}\n")
     print("ledger-roundtrip\tok")
 
 
@@ -278,6 +315,8 @@ def main():
     for name in ("status", "controller-restart", "volume-marker", "ledger-roundtrip"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--workspace", required=True)
+        if name == "ledger-roundtrip":
+            cmd.add_argument("--backup-key", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "self-check":
         self_check()
