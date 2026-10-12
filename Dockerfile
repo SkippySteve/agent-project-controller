@@ -3,13 +3,15 @@ ARG WORKSPACE_IMAGE=debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef0
 ARG GO_IMAGE=golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d
 ARG RUNTIME_IMAGE=alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
 FROM ${GO_IMAGE} AS build
+ARG VERSION=dev
+ARG SOURCE_REVISION=unknown
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY api/ api/
 COPY cmd/ cmd/
 COPY internal/ internal/
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /agent-project-controller ./cmd/agent-project-controller
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${SOURCE_REVISION}" -o /agent-project-controller ./cmd/agent-project-controller
 
 FROM ${RUNTIME_IMAGE} AS runtime
 RUN apk add --no-cache ca-certificates git openssh-client && addgroup -g 1000 agent && adduser -D -u 1000 -G agent agent
