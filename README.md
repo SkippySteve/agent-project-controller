@@ -4,7 +4,7 @@ A Go controller that gives selected Forgejo repositories isolated project enviro
 
 ## Published alpha
 
-Release [0.1.0-alpha.1](https://github.com/SkippySteve/agent-project-controller/releases/tag/0.1.0-alpha.1) is the public starting point. Download `agent-project-controller-0.1.0-alpha.1-linux-amd64` and `agent-project-controller-0.1.0-alpha.1.tgz`, then check them against `SHA256SUMS` from that release. The source archive does not contain container images.
+Release [0.1.0-alpha.1](https://github.com/SkippySteve/agent-project-controller/releases/tag/0.1.0-alpha.1) is the public starting point. The [quickstart](docs/quickstart.md) downloads its Linux amd64 CLI and Helm chart, checks `SHA256SUMS`, and installs the published images. The source archive does not contain container images.
 
 These images were built from commit `6d754c47f223edbe5bfff399405fb1450abb0c4b` and can be pulled without a token:
 
@@ -17,7 +17,7 @@ Current `main` also contains workspace-image replacement and an experimental sta
 
 An alpha pilot has run on a live Cilium and gVisor cluster with upstream Agent Sandbox. The qualified combination is Kubernetes 1.36.2, Agent Sandbox 1.0.4, Cilium 1.19.5, gVisor, Forgejo 15.0.9 and Authentik 2026.5.6. See [installation](docs/installation.md), [security boundaries](docs/security.md), [API](docs/api.md) and [qualification](docs/qualification.md) for the evidence and the remaining limits. Deploy digest-pinned images. The moving `:pilot` tag is not the published release.
 
-The public source mirror is https://github.com/SkippySteve/agent-project-controller. It does not carry Forgejo issues or pull requests. Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
+The public source is https://github.com/SkippySteve/agent-project-controller. Older Forgejo issues are not copied here. Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
 
 ## Relationship to Agent Sandbox
 
