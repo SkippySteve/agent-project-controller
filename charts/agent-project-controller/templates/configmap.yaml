@@ -60,6 +60,11 @@
 {{- fail "network-policy cannot enforce gateway SNI; set proxyGateway.disableSNIFilter true" }}
 {{- end }}
 {{- end }}
+{{- if or (index .Values.config "SANDBOX_CONTROL_URL") (index .Values.config "SANDBOX_CONTROL_ORIGIN") (index .Values.config "SANDBOX_CONTROL_OPERATOR") }}
+{{- range $key := list "SANDBOX_CONTROL_URL" "SANDBOX_CONTROL_ORIGIN" "SANDBOX_CONTROL_OPERATOR" }}
+{{- $_ := required (printf "config.%s is required when integrating existing sandbox controls" $key) (index $.Values.config $key) }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

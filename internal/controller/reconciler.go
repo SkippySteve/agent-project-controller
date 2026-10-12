@@ -194,7 +194,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ct
 		phase = "Pausing"
 		reason = "PausePending"
 		message = "Waiting for project processes to terminate"
-		gone, e := r.workerGone(ctx, w)
+		gone, e := r.processesGone(ctx, w)
 		if e != nil {
 			return ctrl.Result{}, e
 		}
@@ -273,13 +273,13 @@ func (r *Reconciler) validate(ctx context.Context, w *api.ProjectWorkspace) erro
 	if e := r.Get(ctx, types.NamespacedName{Name: r.Config.RuntimeClass}, runtime); e != nil {
 		return errors.New("configured isolation runtime unavailable")
 	}
-	rules, _, e := AccessRules(r.Config.GitHost, r.Config.ForgejoOrigin, w.Spec.Repository)
-	if e != nil {
-		return e
-	}
-	return proxy.Validate(proxy.Config{Rules: append(append([]api.HTTPSRule{}, rules...), w.Spec.HTTPS...)})
+	_, e := r.policyConfiguration(w, w.Spec.HTTPS)
+	return e
 }
 func (r *Reconciler) audit(ctx context.Context, w *api.ProjectWorkspace, action string) error {
+	return r.auditDetails(ctx, w, action, nil)
+}
+func (r *Reconciler) auditDetails(ctx context.Context, w *api.ProjectWorkspace, action string, details map[string]string) error {
 	name := fmt.Sprintf("audit-%s-%d-%s", strings.ReplaceAll(string(w.UID), "-", ""), w.Generation, action)
 	cm := &corev1.ConfigMap{}
 	key := types.NamespacedName{Namespace: r.Config.Namespace, Name: name}
@@ -295,10 +295,21 @@ func (r *Reconciler) audit(ctx context.Context, w *api.ProjectWorkspace, action 
 	if actor == "" {
 		actor = "kubernetes-api-client"
 	}
-	return r.Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: r.Config.Namespace, Labels: labels(w)}, Immutable: &immutable, Data: map[string]string{"workspace": w.Name, "workspaceUID": string(w.UID), "generation": fmt.Sprint(w.Generation), "action": action, "actor": actor, "time": time.Now().UTC().Format(time.RFC3339)}})
+	data := map[string]string{"workspace": w.Name, "workspaceUID": string(w.UID), "generation": fmt.Sprint(w.Generation), "action": action, "actor": actor, "time": time.Now().UTC().Format(time.RFC3339)}
+	for key, value := range details {
+		data[key] = value
+	}
+	return r.Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: r.Config.Namespace, Labels: labels(w)}, Immutable: &immutable, Data: data})
 }
 func (r *Reconciler) status(ctx context.Context, w *api.ProjectWorkspace, phase string, ready bool, reason, message string) error {
 	old := w.DeepCopyObject().(*api.ProjectWorkspace)
+	previous := meta.FindStatusCondition(w.Status.Conditions, "Ready")
+	if !ready && (previous == nil || previous.Reason != reason || previous.Message != message) {
+		sum := sha256.Sum256([]byte(reason + "\n" + message))
+		if e := r.auditDetails(ctx, w, "condition-"+hex.EncodeToString(sum[:8]), map[string]string{"reason": reason, "message": message}); e != nil {
+			return e
+		}
+	}
 	if w.Status.Phase != phase {
 		if e := r.audit(ctx, w, "phase-"+strings.ToLower(phase)); e != nil {
 			return e
@@ -408,7 +419,13 @@ func (r *Reconciler) ensure(ctx context.Context, w *api.ProjectWorkspace) error 
 			return e
 		}
 	}
+	if e = r.updateAccessPolicy(ctx, w, s); e != nil {
+		return e
+	}
 	if e = r.objects(ctx, w, s); e != nil {
+		return e
+	}
+	if e = r.saveAccessPolicy(ctx, w, s); e != nil {
 		return e
 	}
 	if !bytes.Equal(beforeCA, s.Data["ca.crt"]) {
@@ -617,7 +634,7 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 		}
 	case *appsv1.Deployment:
 		current := existing.(*appsv1.Deployment)
-		if !safePod(current.Spec.Template.Spec) {
+		if !safePod(current.Spec.Template.Spec) || current.Spec.Replicas != nil && (*current.Spec.Replicas < 0 || *current.Spec.Replicas > 1) {
 			return errors.New("proxy deployment drift detected")
 		}
 		gotSpec := current.Spec.DeepCopy()
@@ -634,8 +651,10 @@ func (r *Reconciler) apply(ctx context.Context, w *api.ProjectWorkspace, obj cli
 		}
 		dnsChanged := !reflect.DeepEqual(current.Spec.Template.Spec.DNSConfig.Nameservers, expected.Spec.Template.Spec.DNSConfig.Nameservers)
 		imageChanged := gotImage != wantImage
-		if dnsChanged || imageChanged {
+		replicasChanged := !reflect.DeepEqual(current.Spec.Replicas, expected.Spec.Replicas)
+		if dnsChanged || imageChanged || replicasChanged {
 			old := current.DeepCopy()
+			current.Spec.Replicas = expected.Spec.Replicas
 			if dnsChanged {
 				current.Spec.Template.Spec.DNSConfig.Nameservers = append([]string{}, expected.Spec.Template.Spec.DNSConfig.Nameservers...)
 			}
@@ -747,6 +766,7 @@ func normalizeSandboxWorkloadImages(spec map[string]any) {
 	}
 }
 func normalizeProxyDrift(spec *appsv1.DeploymentSpec) {
+	spec.Replicas = nil
 	if spec.Template.Spec.DNSConfig != nil {
 		spec.Template.Spec.DNSConfig.Nameservers = []string{"normalized"}
 	}
@@ -1051,6 +1071,9 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 	plabels["projects.agentwork.dev/role"] = "proxy"
 	proxyDeployment := &appsv1.Deployment{ObjectMeta: metadata(w, "proxy"), Spec: appsv1.DeploymentSpec{Replicas: int32p(1), Selector: &metav1.LabelSelector{MatchLabels: plabels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: plabels}, Spec: corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(1), SecurityContext: &corev1.PodSecurityContext{FSGroup: int64p(1000)}, Containers: []corev1.Container{{Name: "proxy", Image: r.Config.proxyImage(), Args: []string{"proxy"}, SecurityContext: security, Resources: proxyResources, Ports: []corev1.ContainerPort{{ContainerPort: 3128}}, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: fromInt(3128)}}}, VolumeMounts: []corev1.VolumeMount{{Name: "tls", MountPath: "/tls", ReadOnly: true}, {Name: "policy", MountPath: "/policy", ReadOnly: true}}}}, Volumes: []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "proxy-ca", DefaultMode: int32p(0440)}}}, {Name: "policy", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "proxy-policy"}}}}}}}}}
 	r.Config.ProxyScheduling.Apply(&proxyDeployment.Spec.Template.Spec)
+	if w.Spec.DesiredState == "Paused" {
+		proxyDeployment.Spec.Replicas = int32p(0)
+	}
 	objects = append(objects, proxyDeployment)
 	origin := cloneOrigin(r.Config.GitHost, r.Config.ForgejoOrigin)
 	u, e := url.Parse(origin)

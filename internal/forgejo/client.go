@@ -150,7 +150,23 @@ func (c *Client) protect(ctx context.Context, repo string) error {
 		return c.protect(ctx, repo)
 	}
 	if main.EnablePush || main.EnableForcePush || !main.ApplyToAdmins || !main.EnableMergeWhitelist || main.RequiredApprovals < 1 || len(main.MergeWhitelistTeams) > 0 || len(main.MergeWhitelistUsernames) != 1 || main.MergeWhitelistUsernames[0] != c.Owner {
-		return errors.New("main protection requires no direct pushes and reviewed merges by the configured owner only")
+		var unmet []string
+		if main.EnablePush {
+			unmet = append(unmet, "disable direct pushes")
+		}
+		if main.EnableForcePush {
+			unmet = append(unmet, "disable force pushes")
+		}
+		if !main.ApplyToAdmins {
+			unmet = append(unmet, "apply protection to administrators")
+		}
+		if main.RequiredApprovals < 1 {
+			unmet = append(unmet, fmt.Sprintf("require at least 1 approval (currently %d)", main.RequiredApprovals))
+		}
+		if !main.EnableMergeWhitelist || len(main.MergeWhitelistTeams) > 0 || len(main.MergeWhitelistUsernames) != 1 || main.MergeWhitelistUsernames[0] != c.Owner {
+			unmet = append(unmet, "allow merges only by the configured repository owner")
+		}
+		return fmt.Errorf("main branch protection needs operator review: %s. Edit the repository's main protection rule in Settings > Branches; preparation retries automatically", strings.Join(unmet, "; "))
 	}
 	return nil
 }

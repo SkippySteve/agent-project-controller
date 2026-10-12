@@ -15,7 +15,8 @@ Automation can use an explicitly configured bearer secret. OIDC access tokens ar
 - `GET /api/v1/workspaces` returns requests and observed status in the control namespace.
 - `POST /api/v1/workspaces` creates a request with `name`, `repository`, optional `registries` (`go`, `npm`, `python`, `rust`) and optional `https` rules. Names are lowercase DNS labels up to 40 characters. An unknown or repeated registry, or a host listed twice, returns 400.
 - `PATCH /api/v1/workspaces/{name}` sets `desiredState` to `Running`, `Paused` or `Removed`. Include the current `resourceVersion`; a stale request returns 409.
-- `GET /api/v1/workspaces/{name}/audit` returns persisted lifecycle records.
+- `PATCH /api/v1/workspaces/{name}/access` replaces optional HTTPS policy with `https`, optional `registries` and current `resourceVersion`. It requires observed Paused state, an applied previous policy and no project pods. Saving leaves the project paused. Stale, running or unconverged requests return 409.
+- `GET /api/v1/workspaces/{name}/audit` returns persisted lifecycle and condition records, including diagnostic `reason` and `message` when available.
 
 ```json
 {
@@ -28,7 +29,7 @@ Automation can use an explicitly configured bearer secret. OIDC access tokens ar
 
 `registries` expands to the reviewed hosts before the custom resource is stored. `go` becomes GET and HEAD for `proxy.golang.org` and `sum.golang.org`, each with path `/`. The stored `https` list is the expanded registry rules followed by the explicit rules. Path `/` allows the whole host. It does not approve package versions.
 
-No creation request can select arbitrary container images, runtime classes, storage classes, secret mounts or Git origins. Operators configure those on the controller. Repository and HTTPS policy are immutable after creation.
+No creation request can select arbitrary container images, runtime classes, storage classes, secret mounts or Git origins. Operators configure those on the controller. Repository is immutable after creation. HTTPS policy may change only while the workspace stays Paused. The API checks stopped processes, and the controller checks and records the applied policy before resume.
 
 A Ready workspace is entered with `kubectl exec` into container `workspace`, `agent-project-controller connect <name>`, or `agent-project-controller exec <name> -- <command>`. The API does not open a tunnel.
 
@@ -44,4 +45,11 @@ Normal Kubernetes deletion triggers the cleanup finalizer. The dashboard uses th
 
 `internal/forgejo.Host` defines discovery, grant and revocation. The controller selects one implementation for the process, Forgejo or GitHub, and a workspace does not choose the host. `internal/network.Provider` declares capabilities, produces enforcement objects and supplies pod DNS settings that agree with its DNS enforcement. The inspecting proxy is a separate Go component with a policy document. Provider implementations must qualify their actual behavior before being advertised as supported.
 
-The first implementation uses an operator-selected worker image as its environment template. It does not expose multiple named templates. SSH and OpenRig are not installed. A tool that can run `kubectl exec` can use a Ready workspace. That command is not an authenticated model session. Model access is an optional Secret named `model-access` in the project namespace, mounted read-only at `/run/model`. The controller rejects a refresh token in that Secret. Model hosts belong in the immutable HTTPS policy at creation.
+The first implementation uses an operator-selected worker image as its environment template. It does not expose multiple named templates. SSH and OpenRig are not installed. A tool that can run `kubectl exec` can use a Ready workspace. That command is not an authenticated model session. Model access is an optional Secret named `model-access` in the project namespace, mounted read-only at `/run/model`. The controller rejects a refresh token in that Secret. Model hosts must be approved in the HTTPS policy before running a model session. Add them at creation or through a paused access update.
+
+## Combined console
+
+See [the console workflow](console.md) for visible preparation errors, paused
+egress changes and optional integration of existing sandbox controls. The
+`/sandboxes/` routes use the console login and retain the backend's form CSRF
+checks; they do not accept arbitrary upstream targets or proxy credentials.

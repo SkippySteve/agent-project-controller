@@ -43,8 +43,8 @@ spec:
               x-kubernetes-validations:
                 - rule: self.repository == oldSelf.repository
                   message: Repository is immutable; request a new workspace.
-                - rule: "has(self.https) == has(oldSelf.https) && (!has(self.https) || self.https == oldSelf.https)"
-                  message: HTTPS policy is immutable; request a new workspace.
+                - rule: "(has(self.https) == has(oldSelf.https) && (!has(self.https) || self.https == oldSelf.https)) || (oldSelf.desiredState == 'Paused' && self.desiredState == 'Paused')"
+                  message: Pause the workspace before editing HTTPS policy; it must stay paused during the update.
                 - rule: "oldSelf.desiredState != 'Removed' || self.desiredState == 'Removed'"
                   message: Removal is terminal; request a new workspace.
               properties:

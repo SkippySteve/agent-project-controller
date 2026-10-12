@@ -16,7 +16,6 @@ import (
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/forgejo"
-	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/proxy"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,12 +32,20 @@ var app []byte
 //go:embed style.css
 var style []byte
 
+//go:embed shell.js
+var shell []byte
+
+//go:embed console.css
+var consoleStyle []byte
+
 type Server struct {
 	Client                             client.Client
 	Host                               forgejo.Host
 	Namespace, Owner, Password, Origin string
 	OIDC                               *OIDC
 	AllowBasic                         bool
+	GitHost, GitOrigin                 string
+	SandboxControl                     *SandboxControl
 }
 type actorKey struct{}
 
@@ -51,6 +58,11 @@ func (s *Server) Handler() (http.Handler, error) {
 	u, e := url.Parse(s.Origin)
 	if e != nil || u.Host == "" || (u.Scheme != "https" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || s.Password != "" && len(s.Password) < 32 || s.AllowBasic && len(s.Password) < 32 || s.OIDC == nil && !s.AllowBasic {
 		return nil, errors.New("dashboard requires an explicit HTTPS origin and OIDC or explicitly enabled static authentication")
+	}
+	if s.SandboxControl != nil {
+		if e := s.SandboxControl.Validate(); e != nil {
+			return nil, e
+		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +77,14 @@ func (s *Server) Handler() (http.Handler, error) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		w.Write(style)
 	})
+	mux.HandleFunc("GET /shell.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Write(shell)
+	})
+	mux.HandleFunc("GET /console.css", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Write(consoleStyle)
+	})
 	mux.HandleFunc("GET /api/v1/repositories", func(w http.ResponseWriter, r *http.Request) {
 		repos, e := s.Host.Discover(r.Context())
 		if e != nil {
@@ -75,7 +95,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	})
 	mux.HandleFunc("GET /api/v1/session", func(w http.ResponseWriter, r *http.Request) {
 		actor, _ := r.Context().Value(actorKey{}).(string)
-		writeJSON(w, map[string]any{"actor": actor, "oidc": s.OIDC != nil})
+		writeJSON(w, map[string]any{"actor": actor, "oidc": s.OIDC != nil, "sandboxControl": s.SandboxControl != nil})
 	})
 	mux.HandleFunc("GET /api/v1/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		list := &api.ProjectWorkspaceList{}
@@ -87,7 +107,12 @@ func (s *Server) Handler() (http.Handler, error) {
 	})
 	mux.HandleFunc("POST /api/v1/workspaces", s.create)
 	mux.HandleFunc("PATCH /api/v1/workspaces/{name}", s.change)
+	mux.HandleFunc("PATCH /api/v1/workspaces/{name}/access", s.changeAccess)
 	mux.HandleFunc("GET /api/v1/workspaces/{name}/audit", s.audit)
+	if s.SandboxControl != nil {
+		mux.Handle("/sandboxes/", s.SandboxControl.Handler(s.Origin))
+		mux.HandleFunc("GET /sandboxes", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/sandboxes/", http.StatusSeeOther) })
+	}
 	if s.OIDC != nil {
 		mux.HandleFunc("POST /auth/logout", s.OIDC.Logout)
 	}
@@ -124,7 +149,7 @@ func (s *Server) Handler() (http.Handler, error) {
 			subject, session = s.OIDC.Subject(r)
 		}
 		if !bearer && !basic && !session {
-			if s.OIDC != nil && r.Method == "GET" && r.URL.Path == "/" {
+			if s.OIDC != nil && r.Method == "GET" && (r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/sandboxes")) {
 				http.Redirect(w, r, "/auth/login", 302)
 				return
 			}
@@ -140,7 +165,7 @@ func (s *Server) Handler() (http.Handler, error) {
 				http.Error(w, "same-origin request required", 403)
 				return
 			}
-			if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+			if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") && !(s.SandboxControl != nil && strings.HasPrefix(r.URL.Path, "/sandboxes/") && r.Method == "POST") {
 				http.Error(w, "JSON required", 415)
 				return
 			}
@@ -186,21 +211,8 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid project name or repository", 400)
 		return
 	}
-	registryRules, e := proxy.RegistryRules(request.Registries)
+	rules, e := s.accessRules(request.Repository, request.Registries, request.HTTPS)
 	if e != nil {
-		http.Error(w, "unknown registry selection", 400)
-		return
-	}
-	rules := append(registryRules, request.HTTPS...)
-	seen := map[string]bool{}
-	for _, rule := range rules {
-		if seen[rule.Host] {
-			http.Error(w, "duplicate HTTPS host", 400)
-			return
-		}
-		seen[rule.Host] = true
-	}
-	if len(rules) > 0 && proxy.Validate(proxy.Config{Rules: rules}) != nil {
 		http.Error(w, "invalid HTTPS policy", 400)
 		return
 	}
@@ -238,6 +250,12 @@ func (s *Server) change(w http.ResponseWriter, r *http.Request) {
 	if !obj.DeletionTimestamp.IsZero() || obj.Spec.DesiredState == "Removed" {
 		http.Error(w, "removed projects cannot be reopened; create a new project", 409)
 		return
+	}
+	if request.DesiredState == "Running" && obj.Spec.DesiredState == "Paused" && obj.UID != "" {
+		if obj.Status.ObservedGeneration != obj.Generation || obj.Status.Phase != "Paused" || !s.accessApplied(r, obj) {
+			http.Error(w, "wait for the paused project and access update to reconcile before resuming", 409)
+			return
+		}
 	}
 	actor, _ := r.Context().Value(actorKey{}).(string)
 	if obj.Annotations == nil {
