@@ -1,0 +1,36 @@
+# Qualified gVisor profile for charts/agent-project-controller.
+# Replace the image digests, Forgejo origin, public origin and OIDC client
+# before installing. The digests below are syntax examples, not a release.
+# Deploy the digest you qualified. Do not deploy the moving :pilot tag.
+#
+# DNS_DIRECT_ENDPOINTS must be true for this profile. The chart default of
+# false uses the CoreDNS ClusterIP, which failed on the qualified gVisor
+# cluster because socket-level service translation was skipped.
+# disableSNIFilter is required when Cilium resets gateway connections from a
+# proxy pod on the same node. Workers still have no path to that gateway.
+controllerImage: registry.example.com/agent-project-controller@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+workspaceImage: registry.example.com/agent-project-workspace@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+existingSecret: controller-secrets
+automationAPI:
+  enabled: false
+config:
+  FORGEJO_ORIGIN: https://git.example.com
+  FORGEJO_OWNER: owner
+  RUNTIME_CLASS: agent-gvisor
+  STORAGE_CLASS: local-path
+  STORAGE_SIZE: 10Gi
+  CLUSTER_DOMAIN: cluster.local
+  DNS_SERVICE_NAMESPACE: kube-system
+  # This cluster's CoreDNS Service is named coredns. Clusters that keep the
+  # Kubernetes default name should use kube-dns instead.
+  DNS_SERVICE_NAME: coredns
+  DNS_DIRECT_ENDPOINTS: 'true'
+  PROXY_GATEWAY_JSON: '{"namespace":"traefik-system","selector":{"app.kubernetes.io/name":"traefik"},"port":8443,"disableSNIFilter":true}'
+  PUBLIC_ORIGIN: https://projects.example.com
+  OIDC_ISSUER: https://auth.example.com/application/o/agent-project-controller/
+  OIDC_CLIENT_ID: replace-with-the-public-client-id
+  OIDC_GROUPS_CLAIM: groups
+  OIDC_ALLOWED_GROUPS: agent-project-operators
+  OIDC_SCOPES: profile,groups
+  ALLOW_STATIC_LOGIN: 'false'
+  OTEL_ENABLED: 'false'

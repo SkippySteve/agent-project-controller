@@ -1,0 +1,15 @@
+apiVersion: projects.agentwork.dev/v1alpha1
+kind: ProjectWorkspace
+metadata:
+  name: sample-project
+  namespace: agent-project-controller
+spec:
+  repository: operator/sample-project
+  desiredState: Running
+  https:
+    - host: proxy.golang.org
+      methods: [GET, HEAD]
+      paths: [/]
+    - host: sum.golang.org
+      methods: [GET, HEAD]
+      paths: [/]

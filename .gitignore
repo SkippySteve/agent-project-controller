@@ -1,0 +1,8 @@
+/bin/
+/test-results/
+/.env
+*.key
+*.pem
+__pycache__/
+
+/dist/

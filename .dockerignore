@@ -1,0 +1,6 @@
+.git
+bin
+test-results
+.env
+**/*.key
+**/*.pem
