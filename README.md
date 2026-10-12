@@ -115,6 +115,6 @@ Authentik and Keycloak can supply the standard protocol and mapped group claims,
 
 ## Development
 
-Use Go 1.27.2 or later, Git and kubectl for manifest rendering. Run `make test vet build render`. Optional local Kubernetes API and disposable Forgejo qualification are described in [qualification](docs/qualification.md).
+Use Go 1.27.2 or later, Git and kubectl for manifest rendering. Run `make test vet build render`. Install the published CLI from the release rather than `go install` of this module. Contribution rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Optional local Kubernetes API and disposable Forgejo qualification are described in [qualification](docs/qualification.md).
 
 The container image includes the Go controller, inspecting proxy, clone bootstrap and Git credential helper. No frontend build server or Node runtime is required. Optional OpenRig would run separately within a project environment.

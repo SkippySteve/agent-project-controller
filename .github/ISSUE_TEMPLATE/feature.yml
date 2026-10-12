@@ -1,0 +1,14 @@
+name: Feature
+description: A change to the public controller, chart, or docs
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Leave out tokens, pairing URLs, private hostnames, and repository contents. The qualified profile is Cilium and gVisor. The standard NetworkPolicy provider is experimental until a dataplane run qualifies it.
+  - type: textarea
+    id: need
+    attributes:
+      label: What should change
+      description: The operator task that is difficult today, and the behavior you want.
+    validations:
+      required: true

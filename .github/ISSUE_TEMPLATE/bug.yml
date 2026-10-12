@@ -1,0 +1,29 @@
+name: Bug
+description: A defect in a published release, the chart, or the docs
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Leave out tokens, pairing URLs, private hostnames, and repository contents.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag or source commit. The published images are 0.1.0-alpha.1.
+      placeholder: 0.1.0-alpha.1
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what the controller did.
+    validations:
+      required: true
+  - type: textarea
+    id: components
+    attributes:
+      label: Cluster components
+      description: Kubernetes, Agent Sandbox, network provider, and runtime class versions. Omit addresses and account names.
+    validations:
+      required: false
