@@ -47,14 +47,19 @@ import (
 var sandboxGVK = schema.GroupVersionKind{Group: "agents.x-k8s.io", Version: "v1beta1", Kind: "Sandbox"}
 
 type Config struct {
-	Namespace, ForgejoOrigin, Owner, Image, RuntimeClass, StorageClass string
-	ProxyImage                                                         string
-	StorageSize                                                        string
-	WorkerResources, ProxyResources                                    ResourceProfile
-	WorkerScheduling, ProxyScheduling                                  Scheduling
+	Namespace, GitHost, ForgejoOrigin, Owner, Image, RuntimeClass, StorageClass string
+	ProxyImage                                                                  string
+	StorageSize                                                                 string
+	WorkerResources, ProxyResources                                             ResourceProfile
+	WorkerScheduling, ProxyScheduling                                           Scheduling
 }
 
 func (c Config) Validate() error {
+	switch c.GitHost {
+	case "", "forgejo", "github":
+	default:
+		return errors.New("git host must be forgejo or github")
+	}
 	if c.Namespace == "" || c.Owner == "" || c.RuntimeClass == "" || c.StorageClass == "" {
 		return errors.New("control namespace, repository owner, runtime class and storage class required")
 	}
@@ -268,11 +273,11 @@ func (r *Reconciler) validate(ctx context.Context, w *api.ProjectWorkspace) erro
 	if e := r.Get(ctx, types.NamespacedName{Name: r.Config.RuntimeClass}, runtime); e != nil {
 		return errors.New("configured isolation runtime unavailable")
 	}
-	rule, e := proxy.ForgejoRule(r.Config.ForgejoOrigin, w.Spec.Repository)
+	rules, _, e := AccessRules(r.Config.GitHost, r.Config.ForgejoOrigin, w.Spec.Repository)
 	if e != nil {
 		return e
 	}
-	return proxy.Validate(proxy.Config{Rules: append([]api.HTTPSRule{rule}, w.Spec.HTTPS...)})
+	return proxy.Validate(proxy.Config{Rules: append(append([]api.HTTPSRule{}, rules...), w.Spec.HTTPS...)})
 }
 func (r *Reconciler) audit(ctx context.Context, w *api.ProjectWorkspace, action string) error {
 	name := fmt.Sprintf("audit-%s-%d-%s", strings.ReplaceAll(string(w.UID), "-", ""), w.Generation, action)
@@ -997,11 +1002,11 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 	if e != nil {
 		return e
 	}
-	rule, e := proxy.ForgejoRule(r.Config.ForgejoOrigin, w.Spec.Repository)
+	rules, privateHosts, e := AccessRules(r.Config.GitHost, r.Config.ForgejoOrigin, w.Spec.Repository)
 	if e != nil {
 		return e
 	}
-	cfg := proxy.Config{Rules: append([]api.HTTPSRule{rule}, w.Spec.HTTPS...), PrivateHosts: []string{rule.Host}}
+	cfg := proxy.Config{Rules: append(append([]api.HTTPSRule{}, rules...), w.Spec.HTTPS...), PrivateHosts: privateHosts}
 	raw, e := json.Marshal(cfg)
 	if e != nil {
 		return e
@@ -1047,8 +1052,12 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 	proxyDeployment := &appsv1.Deployment{ObjectMeta: metadata(w, "proxy"), Spec: appsv1.DeploymentSpec{Replicas: int32p(1), Selector: &metav1.LabelSelector{MatchLabels: plabels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: plabels}, Spec: corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(1), SecurityContext: &corev1.PodSecurityContext{FSGroup: int64p(1000)}, Containers: []corev1.Container{{Name: "proxy", Image: r.Config.proxyImage(), Args: []string{"proxy"}, SecurityContext: security, Resources: proxyResources, Ports: []corev1.ContainerPort{{ContainerPort: 3128}}, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: fromInt(3128)}}}, VolumeMounts: []corev1.VolumeMount{{Name: "tls", MountPath: "/tls", ReadOnly: true}, {Name: "policy", MountPath: "/policy", ReadOnly: true}}}}, Volumes: []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "proxy-ca", DefaultMode: int32p(0440)}}}, {Name: "policy", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "proxy-policy"}}}}}}}}}
 	r.Config.ProxyScheduling.Apply(&proxyDeployment.Spec.Template.Spec)
 	objects = append(objects, proxyDeployment)
-	u, _ := url.Parse(r.Config.ForgejoOrigin)
-	env := []corev1.EnvVar{{Name: "HOME", Value: "/workspace/home"}, {Name: "GIT_ORIGIN", Value: r.Config.ForgejoOrigin}, {Name: "GIT_HOST", Value: u.Host}, {Name: "GIT_REPOSITORY", Value: w.Spec.Repository}, {Name: "GIT_WORK_BRANCH", Value: "agent/" + identity(w)}, {Name: "GIT_TERMINAL_PROMPT", Value: "0"}, {Name: "HTTPS_PROXY", Value: "http://proxy:3128"}, {Name: "https_proxy", Value: "http://proxy:3128"}, {Name: "HTTP_PROXY", Value: "http://proxy:3128"}, {Name: "http_proxy", Value: "http://proxy:3128"}, {Name: "SSL_CERT_FILE", Value: "/workspace/home/ca-bundle.crt"}, {Name: "NODE_EXTRA_CA_CERTS", Value: "/trust/ca.crt"}, {Name: "REQUESTS_CA_BUNDLE", Value: "/workspace/home/ca-bundle.crt"}}
+	origin := cloneOrigin(r.Config.GitHost, r.Config.ForgejoOrigin)
+	u, e := url.Parse(origin)
+	if e != nil || u == nil || u.Host == "" {
+		return errors.New("git origin required")
+	}
+	env := []corev1.EnvVar{{Name: "HOME", Value: "/workspace/home"}, {Name: "GIT_ORIGIN", Value: origin}, {Name: "GIT_HOST", Value: u.Host}, {Name: "GIT_REPOSITORY", Value: w.Spec.Repository}, {Name: "GIT_WORK_BRANCH", Value: "agent/" + identity(w)}, {Name: "GIT_TERMINAL_PROMPT", Value: "0"}, {Name: "HTTPS_PROXY", Value: "http://proxy:3128"}, {Name: "https_proxy", Value: "http://proxy:3128"}, {Name: "HTTP_PROXY", Value: "http://proxy:3128"}, {Name: "http_proxy", Value: "http://proxy:3128"}, {Name: "SSL_CERT_FILE", Value: "/workspace/home/ca-bundle.crt"}, {Name: "NODE_EXTRA_CA_CERTS", Value: "/trust/ca.crt"}, {Name: "REQUESTS_CA_BUNDLE", Value: "/workspace/home/ca-bundle.crt"}}
 	mounts := []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}, {Name: "identity", MountPath: "/identity", ReadOnly: true}, {Name: "trust", MountPath: "/trust", ReadOnly: true}, {Name: "model", MountPath: "/run/model", ReadOnly: true}, {Name: "scratch", MountPath: "/tmp"}}
 	workerlabels := labels(w)
 	workerlabels["projects.agentwork.dev/role"] = "worker"

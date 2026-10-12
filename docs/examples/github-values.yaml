@@ -1,0 +1,40 @@
+# Optional GitHub project host for charts/agent-project-controller.
+# This is not the qualified profile. The published 0.1.0-alpha.1 images below
+# do not contain GitHub host support. Build this source, push the resulting
+# image, and replace both digests before installing. Do not point GIT_HOST
+# at those published digests.
+#
+# Create Secret controller-secrets outside this file. It needs
+# github-app-private-key (a PKCS#1 or PKCS#8 RSA PEM of at least 2048 bits)
+# and oidc-client-secret. Do not commit the private key. Leave
+# FORGEJO_ORIGIN, FORGEJO_OWNER, and the Forgejo token unset.
+#
+# Dashboard login stays the operator OIDC provider. GitHub is only where
+# project repositories are stored. One controller process uses one host.
+# Classic main protection must already exist. See docs/installation.md.
+controllerImage: ghcr.io/skippysteve/agent-project-controller@sha256:084fdfa09f04a279d6ea11bf168222e388f9f5230ddda38a62dcade5f9b9b9d3
+workspaceImage: ghcr.io/skippysteve/agent-project-workspace@sha256:caf59a3dac5b216aa670f02cc4db857cf7b214d346fc844722f7a7c602ba9892
+existingSecret: controller-secrets
+automationAPI:
+  enabled: false
+config:
+  GIT_HOST: github
+  GITHUB_OWNER: owner
+  GITHUB_APP_ID: "1"
+  GITHUB_APP_INSTALLATION_ID: "1"
+  NETWORK_PROVIDER: cilium
+  RUNTIME_CLASS: agent-gvisor
+  STORAGE_CLASS: local-path
+  STORAGE_SIZE: 10Gi
+  CLUSTER_DOMAIN: cluster.local
+  DNS_SERVICE_NAMESPACE: kube-system
+  DNS_SERVICE_NAME: kube-dns
+  DNS_DIRECT_ENDPOINTS: 'true'
+  PUBLIC_ORIGIN: https://projects.example.com
+  OIDC_ISSUER: https://auth.example.com/application/o/agent-project-controller/
+  OIDC_CLIENT_ID: replace-with-the-public-client-id
+  OIDC_GROUPS_CLAIM: groups
+  OIDC_ALLOWED_GROUPS: agent-project-operators
+  OIDC_SCOPES: profile,groups
+  ALLOW_STATIC_LOGIN: 'false'
+  OTEL_ENABLED: 'false'

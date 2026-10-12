@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/connect"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/controller"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/forgejo"
+	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/githubhost"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/network"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/preflight"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/proxy"
@@ -54,6 +56,55 @@ func secret(k string) (string, error) {
 		return "", fmt.Errorf("unable to read %s", k)
 	}
 	return strings.TrimSpace(string(b)), nil
+}
+func positiveID(key string) (int64, error) {
+	value := os.Getenv(key)
+	n, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || n <= 0 || strconv.FormatInt(n, 10) != value {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return n, nil
+}
+func openGitHost() (forgejo.Host, string, string, string, error) {
+	switch env("GIT_HOST", "forgejo") {
+	case "forgejo":
+		token, err := secret("FORGEJO_TOKEN_FILE")
+		if err != nil {
+			return nil, "", "", "", err
+		}
+		client, err := forgejo.New(os.Getenv("FORGEJO_ORIGIN"), os.Getenv("FORGEJO_OWNER"), token)
+		if err != nil {
+			return nil, "", "", "", err
+		}
+		return client, "forgejo", client.Origin, client.Owner, nil
+	case "github":
+		if os.Getenv("FORGEJO_ORIGIN") != "" || os.Getenv("FORGEJO_OWNER") != "" || os.Getenv("FORGEJO_TOKEN_FILE") != "" {
+			return nil, "", "", "", errors.New("GIT_HOST=github does not use Forgejo settings")
+		}
+		appID, err := positiveID("GITHUB_APP_ID")
+		if err != nil {
+			return nil, "", "", "", err
+		}
+		installationID, err := positiveID("GITHUB_APP_INSTALLATION_ID")
+		if err != nil {
+			return nil, "", "", "", err
+		}
+		path := os.Getenv("GITHUB_APP_PRIVATE_KEY_FILE")
+		if path == "" {
+			return nil, "", "", "", errors.New("GITHUB_APP_PRIVATE_KEY_FILE is required")
+		}
+		key, err := os.ReadFile(path)
+		if err != nil {
+			return nil, "", "", "", errors.New("unable to read GITHUB_APP_PRIVATE_KEY_FILE")
+		}
+		client, err := githubhost.New(os.Getenv("GITHUB_OWNER"), appID, installationID, key)
+		if err != nil {
+			return nil, "", "", "", err
+		}
+		return client, "github", "https://github.com", client.Owner, nil
+	default:
+		return nil, "", "", "", errors.New("GIT_HOST must be forgejo or github")
+	}
 }
 func run(ctx context.Context) error {
 	if len(os.Args) > 1 {
@@ -108,18 +159,15 @@ func run(ctx context.Context) error {
 		}
 	}
 	ns := env("CONTROL_NAMESPACE", "agent-project-controller")
-	token, e := secret("FORGEJO_TOKEN_FILE")
-	if e != nil {
-		return e
-	}
 	password := ""
 	if os.Getenv("API_SECRET_FILE") != "" {
+		var e error
 		password, e = secret("API_SECRET_FILE")
 		if e != nil {
 			return e
 		}
 	}
-	host, e := forgejo.New(os.Getenv("FORGEJO_ORIGIN"), os.Getenv("FORGEJO_OWNER"), token)
+	host, gitHost, origin, owner, e := openGitHost()
 	if e != nil {
 		return e
 	}
@@ -161,7 +209,7 @@ func run(ctx context.Context) error {
 	if e != nil {
 		return fmt.Errorf("proxy scheduling: %w", e)
 	}
-	reconciler := &controller.Reconciler{Client: direct, Host: host, Network: networkProvider, Config: controller.Config{Namespace: ns, ForgejoOrigin: host.Origin, Owner: host.Owner, Image: os.Getenv("WORKSPACE_IMAGE"), ProxyImage: os.Getenv("PROXY_IMAGE"), RuntimeClass: os.Getenv("RUNTIME_CLASS"), StorageClass: os.Getenv("STORAGE_CLASS"), StorageSize: env("STORAGE_SIZE", "10Gi"), WorkerResources: profile("WORKSPACE"), ProxyResources: profile("PROXY"), WorkerScheduling: workerScheduling, ProxyScheduling: proxyScheduling}}
+	reconciler := &controller.Reconciler{Client: direct, Host: host, Network: networkProvider, Config: controller.Config{Namespace: ns, GitHost: gitHost, ForgejoOrigin: origin, Owner: owner, Image: os.Getenv("WORKSPACE_IMAGE"), ProxyImage: os.Getenv("PROXY_IMAGE"), RuntimeClass: os.Getenv("RUNTIME_CLASS"), StorageClass: os.Getenv("STORAGE_CLASS"), StorageSize: env("STORAGE_SIZE", "10Gi"), WorkerResources: profile("WORKSPACE"), ProxyResources: profile("PROXY"), WorkerScheduling: workerScheduling, ProxyScheduling: proxyScheduling}}
 	if e = reconciler.Config.Validate(); e != nil {
 		return e
 	}
@@ -174,7 +222,7 @@ func run(ctx context.Context) error {
 	if e = manager.AddReadyzCheck("readyz", healthz.Ping); e != nil {
 		return e
 	}
-	server := &web.Server{Client: direct, Host: host, Namespace: ns, Owner: host.Owner, Password: password, Origin: os.Getenv("PUBLIC_ORIGIN"), AllowBasic: os.Getenv("ALLOW_STATIC_LOGIN") == "true"}
+	server := &web.Server{Client: direct, Host: host, Namespace: ns, Owner: owner, Password: password, Origin: os.Getenv("PUBLIC_ORIGIN"), AllowBasic: os.Getenv("ALLOW_STATIC_LOGIN") == "true"}
 	if os.Getenv("OIDC_ISSUER") != "" {
 		clientSecret, err := secret("OIDC_CLIENT_SECRET_FILE")
 		if err != nil {

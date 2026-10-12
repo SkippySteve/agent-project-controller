@@ -480,3 +480,19 @@ func ForgejoRule(origin, repo string) (api.HTTPSRule, error) {
 	}
 	return api.HTTPSRule{Host: u.Hostname(), Methods: []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}, Paths: []string{"/" + repo + ".git", "/api/v1/repos/" + repo}}, nil
 }
+
+var repositoryName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$`)
+
+// GitHubRules allows git transport on github.com and the REST API for one
+// repository on api.github.com. Callers leave both hosts off the private-host
+// list so a private DNS answer is rejected.
+func GitHubRules(repo string) ([]api.HTTPSRule, error) {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || strings.Contains(name, "/") || !repositoryName.MatchString(owner) || !repositoryName.MatchString(name) {
+		return nil, errors.New("GitHub repository must be owner/name")
+	}
+	return []api.HTTPSRule{
+		{Host: "github.com", Methods: []string{"GET", "POST"}, Paths: []string{"/" + repo + ".git"}},
+		{Host: "api.github.com", Methods: []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}, Paths: []string{"/repos/" + repo}},
+	}, nil
+}

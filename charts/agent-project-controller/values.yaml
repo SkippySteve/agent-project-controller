@@ -11,6 +11,9 @@ config:
   NETWORK_PROVIDER: cilium
   NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED: 'false'
   NETWORK_POLICY_CLUSTER_CIDRS_JSON: ''
+  # forgejo is the qualified host. github is an optional project host and is
+  # not in the published 0.1.0-alpha.1 images. One controller uses one host.
+  GIT_HOST: forgejo
   FORGEJO_ORIGIN: ''
   FORGEJO_OWNER: ''
   RUNTIME_CLASS: gvisor

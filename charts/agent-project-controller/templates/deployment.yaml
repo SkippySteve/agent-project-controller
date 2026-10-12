@@ -53,8 +53,17 @@ spec:
             - configMapRef:
                 name: controller-config
           env:
+{{- $gitHost := default "forgejo" (index .Values.config "GIT_HOST" | toString) }}
+{{- if not (or (eq $gitHost "forgejo") (eq $gitHost "github")) }}
+{{- fail "GIT_HOST must be forgejo or github" }}
+{{- end }}
+{{- if eq $gitHost "github" }}
+            - name: GITHUB_APP_PRIVATE_KEY_FILE
+              value: /control-secrets/github-app-private-key
+{{- else }}
             - name: FORGEJO_TOKEN_FILE
               value: /control-secrets/forgejo-token
+{{- end }}
             - name: OIDC_CLIENT_SECRET_FILE
               value: /control-secrets/oidc-client-secret
 {{- if .Values.automationAPI.enabled }}

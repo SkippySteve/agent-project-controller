@@ -1,4 +1,4 @@
-{{- range $key := list "CONTROL_NAMESPACE" "WORKSPACE_IMAGE" "PROXY_IMAGE" "LISTEN_ADDR" "FORGEJO_TOKEN_FILE" "OIDC_CLIENT_SECRET_FILE" "API_SECRET_FILE" "WORKSPACE_SCHEDULING_JSON" "PROXY_SCHEDULING_JSON" }}
+{{- range $key := list "CONTROL_NAMESPACE" "WORKSPACE_IMAGE" "PROXY_IMAGE" "LISTEN_ADDR" "FORGEJO_TOKEN_FILE" "GITHUB_APP_PRIVATE_KEY_FILE" "OIDC_CLIENT_SECRET_FILE" "API_SECRET_FILE" "WORKSPACE_SCHEDULING_JSON" "PROXY_SCHEDULING_JSON" }}
 {{- if hasKey $.Values.config $key }}
 {{- fail (printf "config.%s is managed by the chart; use the corresponding chart setting" $key) }}
 {{- end }}
@@ -9,7 +9,32 @@
 {{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" .Values.workspaceImage) }}
 {{- fail "workspaceImage must use @sha256:<64 lowercase hex characters>" }}
 {{- end }}
-{{- range $key := list "FORGEJO_ORIGIN" "FORGEJO_OWNER" "PUBLIC_ORIGIN" "OIDC_ISSUER" "OIDC_CLIENT_ID" }}
+{{- $gitHost := default "forgejo" (index .Values.config "GIT_HOST" | toString) }}
+{{- if not (or (eq $gitHost "forgejo") (eq $gitHost "github")) }}
+{{- fail "GIT_HOST must be forgejo or github" }}
+{{- end }}
+{{- if eq $gitHost "github" }}
+{{- range $key := list "GITHUB_OWNER" "GITHUB_APP_ID" "GITHUB_APP_INSTALLATION_ID" }}
+{{- $_ := required (printf "config.%s is required" $key) (index $.Values.config $key) }}
+{{- end }}
+{{- if not (regexMatch "^[1-9][0-9]*$" (index .Values.config "GITHUB_APP_ID" | toString)) }}
+{{- fail "config.GITHUB_APP_ID must be a positive integer" }}
+{{- end }}
+{{- if not (regexMatch "^[1-9][0-9]*$" (index .Values.config "GITHUB_APP_INSTALLATION_ID" | toString)) }}
+{{- fail "config.GITHUB_APP_INSTALLATION_ID must be a positive integer" }}
+{{- end }}
+{{- if or (index .Values.config "FORGEJO_ORIGIN") (index .Values.config "FORGEJO_OWNER") }}
+{{- fail "GIT_HOST=github does not accept FORGEJO_ORIGIN or FORGEJO_OWNER" }}
+{{- end }}
+{{- else }}
+{{- range $key := list "FORGEJO_ORIGIN" "FORGEJO_OWNER" }}
+{{- $_ := required (printf "config.%s is required" $key) (index $.Values.config $key) }}
+{{- end }}
+{{- if or (index .Values.config "GITHUB_OWNER") (index .Values.config "GITHUB_APP_ID") (index .Values.config "GITHUB_APP_INSTALLATION_ID") }}
+{{- fail "GIT_HOST=forgejo does not accept GitHub App settings" }}
+{{- end }}
+{{- end }}
+{{- range $key := list "PUBLIC_ORIGIN" "OIDC_ISSUER" "OIDC_CLIENT_ID" }}
 {{- $_ := required (printf "config.%s is required" $key) (index $.Values.config $key) }}
 {{- end }}
 {{- $proxyImage := default .Values.controllerImage .Values.proxyImage }}
@@ -50,7 +75,8 @@ data:
   PROXY_GATEWAY_JSON: {{ toJson .Values.proxyGateway | quote }}
 {{- end }}
 {{- range $key, $value := .Values.config }}
-{{- if not (and (eq $key "PROXY_GATEWAY_JSON") $.Values.proxyGateway) }}
+{{- if and (eq $gitHost "github") (or (eq $key "FORGEJO_ORIGIN") (eq $key "FORGEJO_OWNER")) }}
+{{- else if not (and (eq $key "PROXY_GATEWAY_JSON") $.Values.proxyGateway) }}
   {{ $key }}: {{ $value | toString | quote }}
 {{- end }}
 {{- end }}

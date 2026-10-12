@@ -125,6 +125,38 @@ func TestDestinationSafety(t *testing.T) {
 		t.Error("public IP rejected")
 	}
 }
+func TestGitHubRulesStayOnOneRepository(t *testing.T) {
+	rules, err := GitHubRules("owner/repo")
+	if err != nil || len(rules) != 2 {
+		t.Fatal(err)
+	}
+	config := Config{Rules: rules}
+	if err = Validate(config); err != nil {
+		t.Fatal(err)
+	}
+	if !Allowed(config, "github.com", "GET", "/owner/repo.git/info/refs") || !Allowed(config, "github.com", "POST", "/owner/repo.git/git-receive-pack") {
+		t.Fatal("git transport denied")
+	}
+	if !Allowed(config, "api.github.com", "POST", "/repos/owner/repo/pulls") || !Allowed(config, "api.github.com", "GET", "/repos/owner/repo") {
+		t.Fatal("repository API denied")
+	}
+	for _, attempt := range []struct{ host, method, path string }{
+		{"github.com", "PUT", "/owner/repo.git/info/refs"},
+		{"github.com", "GET", "/other/repo.git/info/refs"},
+		{"api.github.com", "GET", "/repos/other/repo"},
+		{"api.github.com", "GET", "/repos/owner/repository"},
+		{"api.github.com", "DELETE", "/user"},
+		{"api.github.com", "GET", "/repos/owner/repo.git"},
+	} {
+		if Allowed(config, attempt.host, attempt.method, attempt.path) {
+			t.Error(attempt)
+		}
+	}
+	if _, err = GitHubRules("owner/../repo"); err == nil {
+		t.Fatal("path escape accepted")
+	}
+}
+
 func TestPathBoundaries(t *testing.T) {
 	c := Config{Rules: []api.HTTPSRule{{Host: "api.example.com", Methods: []string{"GET"}, Paths: []string{"/v1/project"}}}}
 	for _, path := range []string{"/v1/projects", "/v1/project/../admin", "/v1/project\\admin", "/v1//project"} {

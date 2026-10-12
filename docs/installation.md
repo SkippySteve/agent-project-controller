@@ -15,6 +15,29 @@ Deploy first in a disposable qualification cluster. This initial implementation 
 
 Approved operators share one trust boundary and can manage every project under that owner.
 
+## GitHub project host
+
+GitHub can replace Forgejo as the place projects are stored. It is optional, it is not qualified, and it is not in the published `0.1.0-alpha.1` images or chart. A deployment that selects it must be built from the commit that adds `GIT_HOST=github` and deployed by that build's digest. `docs/examples/github-values.yaml` shows the Helm shape and repeats the published digests only so they are recognizable. Do not install those digests with `GIT_HOST=github`.
+
+One controller process uses one host. `GIT_HOST` defaults to `forgejo`, which keeps an existing installation unchanged. `GIT_HOST=github` is a separate deployment. A workspace repository is still `owner/name`; it does not carry its own host. Dashboard login stays the operator OIDC provider. GitHub is not a substitute for that login. GitHub Enterprise Server is not supported.
+
+Create a GitHub App, disable its webhook, and grant the installation Administration read, Contents read and write, Pull requests read and write, and Metadata read. Install it on the account named by `GITHUB_OWNER`, preferably with only the repositories operators may open. Record the App id and the installation id. Store the App private key, a PKCS#1 or PKCS#8 RSA PEM of at least 2048 bits, as Secret key `github-app-private-key`. The chart does not create that Secret and the key must not be committed.
+
+```sh
+kubectl create namespace agent-project-controller
+kubectl -n agent-project-controller create secret generic controller-secrets \
+  --from-file=github-app-private-key=/secure/path/github-app-private-key.pem \
+  --from-file=oidc-client-secret=/secure/path/oidc-client-secret
+```
+
+Set `GITHUB_OWNER`, `GITHUB_APP_ID`, and `GITHUB_APP_INSTALLATION_ID`. Leave `FORGEJO_ORIGIN`, `FORGEJO_OWNER`, and the Forgejo token unset on that deployment. `PUBLIC_ORIGIN` and the OIDC client stay required.
+
+Before the first grant, classic branch protection on `main` must enforce rules for administrators, require at least one approving review, restrict who can push, omit this GitHub App from that allow list, and leave force-push and branch deletion disabled. A missing rule or a ruleset-only repository is refused. The controller does not create or repair GitHub protection.
+
+The controller keeps one installation token in memory for discovery and protection reads. Each workspace receives a separate token limited to that one repository, with contents write, pull requests write, and metadata read. A response that names another repository, selects every repository, or carries any other permission is discarded and revoked. The workspace clones `https://github.com/owner/name.git`. Its ledger username is the workspace identity; GitHub accepts that username when the password is the installation token. `github.com` and `api.github.com` are not private-host exceptions, so a private or reserved DNS answer is rejected.
+
+Tokens expire in about one hour. A stored token is reused while its recorded expiry is more than 20 minutes away and GitHub still accepts it. Otherwise the controller revokes it and mints a replacement. A restart forgets those expiry records, so the next grant rotates the stored token. GitHub does not list live installation tokens. A token issued and then lost before the ledger save can remain valid until GitHub expires it. Removal confirms the stored token and any token this process still remembers. No live GitHub grant is part of this alpha.
+
 ## Experimental standard NetworkPolicy
 
 `NETWORK_PROVIDER=network-policy` is an opt-in profile for clusters that do not run Cilium. It is not qualified. Do not describe it as a supported dataplane, and do not point it at a cluster whose enforcement has not been tested independently. The default remains `cilium`.
@@ -36,7 +59,7 @@ docker build -t registry.example.com/agent-project-controller:dev .
 docker push registry.example.com/agent-project-controller:dev
 ```
 
-The published alpha images can be used instead of that local build. Their digests are in [examples/alpha-values.yaml](examples/alpha-values.yaml) and on the [0.1.0-alpha.1 release](https://github.com/SkippySteve/agent-project-controller/releases/tag/0.1.0-alpha.1). Those images are commit `6d754c47f223edbe5bfff399405fb1450abb0c4b`. Workspace-image replacement and the experimental NetworkPolicy provider landed on `main` after that commit. A deployment that needs either behavior must build that later source and deploy the resulting digest.
+The published alpha images can be used instead of that local build. Their digests are in [examples/alpha-values.yaml](examples/alpha-values.yaml) and on the [0.1.0-alpha.1 release](https://github.com/SkippySteve/agent-project-controller/releases/tag/0.1.0-alpha.1). Those images are commit `6d754c47f223edbe5bfff399405fb1450abb0c4b`. Workspace-image replacement, the experimental NetworkPolicy provider, and the optional GitHub project host landed on `main` after that commit. A deployment that needs any of those behaviors must build that later source and deploy the resulting digest.
 
 Prepare a Kustomize overlay over `config/deploy`. Set the controller Deployment image and `WORKSPACE_IMAGE` to the built digest. Replace example hosts, Forgejo owner, runtime class, storage class and OIDC settings. Set `CLUSTER_DOMAIN` if it differs from `cluster.local`. `WORKSPACE_IMAGE` is empty in the sample, so unconfigured installations fail rather than launching an arbitrary image.
 
