@@ -15,6 +15,7 @@ import (
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/network"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,6 +84,7 @@ func fixture(t *testing.T) (*Reconciler, *api.ProjectWorkspace, *host) {
 	runtimeClass := &unstructured.Unstructured{}
 	runtimeClass.SetGroupVersionKind(schema.GroupVersionKind{Group: "node.k8s.io", Version: "v1", Kind: "RuntimeClass"})
 	runtimeClass.SetName("gvisor")
+	_ = networkingv1.AddToScheme(s)
 	policy := corev1.PersistentVolumeReclaimDelete
 	w := &api.ProjectWorkspace{ObjectMeta: metav1.ObjectMeta{Name: "project", Namespace: "control", UID: types.UID("12345678-1234-1234-1234-123456789012"), Generation: 1, Finalizers: []string{api.Finalizer}}, Spec: api.WorkspaceSpec{Repository: "steve/project", DesiredState: "Running"}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(w).WithObjects(w, runtimeClass, &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "delete"}, ReclaimPolicy: &policy}).Build()

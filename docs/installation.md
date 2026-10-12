@@ -15,6 +15,18 @@ Deploy first in a disposable qualification cluster. This initial implementation 
 
 Approved operators share one trust boundary and can manage every project under that owner.
 
+## Experimental standard NetworkPolicy
+
+`NETWORK_PROVIDER=network-policy` is an opt-in profile for clusters that do not run Cilium. It is not qualified. Do not describe it as a supported dataplane, and do not point it at a cluster whose enforcement has not been tested independently. The default remains `cilium`.
+
+Standard NetworkPolicy has no DNS name filter. In this profile the worker has no DNS egress at all. The controller allocates a proxy ClusterIP and pins the hostname `proxy` in the worker pod with `hostAliases`. Worker egress is only that proxy on TCP 3128. The proxy may query CoreDNS and connect to public IPv4, and to IPv6 global unicast `2000::/3`, on TCP 443. Reserved, private, documentation, and operator-declared cluster ranges are excluded. IPv4-mapped IPv6 addresses are outside the IPv6 allow. HTTPS host, method, and path checks still happen inside the inspecting proxy.
+
+The profile refuses to start unless `NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED` is exactly `true` and `NETWORK_POLICY_CLUSTER_CIDRS_JSON` is a non-empty JSON array of canonical pod, service, and node prefixes. A default route is rejected. The acknowledgement records that an operator ran the procedure in [qualification](qualification.md). API objects do not prove that the installed CNI enforces the policy.
+
+An explicit gateway must set `disableSNIFilter` to true. Native policy can limit the gateway peer and port, and it cannot limit TLS server names. A compromised proxy is the remaining HTTPS boundary: it can use its own public TCP 443 permission and any configured gateway. Workers still cannot. Extra NetworkPolicy objects in a project namespace are rejected because the API is additive. Policies outside the project namespace are not visible to this check.
+
+Switching an existing project between `cilium` and `network-policy` is refused. The controller leaves the old proxy Service and policies in place and suspends the workspace. Remove and recreate the project after the dataplane procedure passes. See `docs/examples/network-policy-values.yaml` for the Helm shape. The sample Kustomize ClusterRole also grants NetworkPolicy and node read access so an overlay can select this profile. Remove those rules when the experimental profile is not installed.
+
 ## Build and configure
 
 Build and push the image to your registry. For release builds pass digest-pinned base references with `--build-arg GO_IMAGE=...` and `--build-arg RUNTIME_IMAGE=...`. Deploy the resulting image by its registry digest, not a mutable tag.
@@ -32,7 +44,7 @@ Clusters can keep node-local DNS for other workloads. For this profile, project 
 
 Workspace resource defaults are a `500m` CPU and `512Mi` memory request with limits of `4` CPUs and `4Gi`. The clone init container uses the same profile. The HTTPS proxy has separate defaults of `100m` / `128Mi` requests and `1` CPU / `512Mi` limits. Configure these with `WORKSPACE_CPU_REQUEST`, `WORKSPACE_MEMORY_REQUEST`, `WORKSPACE_CPU_LIMIT`, `WORKSPACE_MEMORY_LIMIT` and the equivalent `PROXY_` variables. Values must be positive and requests must not exceed limits. Requests reserve scheduling capacity; limits bound use, so a memory-heavy build may still need a larger profile.
 
-Resource profiles and resolver settings are immutable for already provisioned environments. Configuration changes apply to new projects. Existing projects report configuration drift and remain suspended rather than silently changing their security settings. Remove and recreate them after saving local work when changing these settings.
+Resource profiles, resolver settings, and the selected network provider are immutable for already provisioned environments. Configuration changes apply to new projects. Existing projects report configuration drift and remain suspended rather than silently changing their security settings. Remove and recreate them after saving local work when changing these settings.
 
 Create the control namespace, then supply a Secret named `controller-secrets` there. Use `--from-file` with protected files so credentials do not enter shell arguments or Git:
 
@@ -59,7 +71,7 @@ Expose the ClusterIP Service through your existing TLS reverse proxy. Do not exp
 
 Render your overlay, inspect its RBAC and apply it to the qualification cluster. The controller has cross-namespace resource permissions to provision projects, so its credential and service account must be treated as privileged infrastructure.
 
-Before trusting a cluster, run `agent-project-controller preflight` with the same `RUNTIME_CLASS`, `STORAGE_CLASS`, DNS and `PROXY_GATEWAY_JSON` settings the controller will use. It checks the Agent Sandbox CRD, Cilium and CoreDNS, the RuntimeClass, and Delete reclaim on the storage class. A passing preflight is not the qualification in [qualification](qualification.md). Applying the CRD is not qualification either.
+Before trusting a cluster, run `agent-project-controller preflight` with the same `RUNTIME_CLASS`, `STORAGE_CLASS`, `NETWORK_PROVIDER`, DNS, cluster CIDR, and `PROXY_GATEWAY_JSON` settings the controller will use. The Cilium profile checks the Agent Sandbox CRD, the CiliumNetworkPolicy CRD, and CoreDNS. The experimental NetworkPolicy profile reports `network-policy-dns` and checks that declared exclusions cover CoreDNS, the Kubernetes API address, node addresses, and pod CIDRs. Both profiles check the RuntimeClass and Delete reclaim on the storage class. A passing preflight is not the qualification in [qualification](qualification.md). Applying the CRD is not qualification either.
 
 ## Client limit
 

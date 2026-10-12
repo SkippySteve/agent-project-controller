@@ -9,6 +9,7 @@ resources:
 configMapGenerator:
   - name: controller-config
     literals:
+      - NETWORK_PROVIDER=cilium
       - CONTROL_NAMESPACE=agent-project-controller
       - LISTEN_ADDR=0.0.0.0:8080
       - FORGEJO_ORIGIN=https://forgejo.example.com

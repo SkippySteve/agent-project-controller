@@ -2,7 +2,6 @@ package preflight
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,7 +46,11 @@ func Check(ctx context.Context, c client.Client, o Options) []Result {
 		err = errors.New("Agent Sandbox CRD sandboxes.agents.x-k8s.io is required")
 	}
 	add("agent-sandbox", err)
-	add("cilium-dns", o.Network.Check(ctx, c))
+	name := "cilium-dns"
+	if o.Network.Capabilities().ServiceProxy {
+		name = "network-policy-dns"
+	}
+	add(name, o.Network.Check(ctx, c))
 	runtime := &unstructured.Unstructured{}
 	runtime.SetGroupVersionKind(schema.GroupVersionKind{Group: "node.k8s.io", Version: "v1", Kind: "RuntimeClass"})
 	err = c.Get(ctx, client.ObjectKey{Name: o.RuntimeClass}, runtime)
@@ -79,24 +82,12 @@ func Run(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	provider := network.Cilium{ClusterDomain: getenv("CLUSTER_DOMAIN", "cluster.local"), DNSNamespace: getenv("DNS_SERVICE_NAMESPACE", "kube-system"), DNSService: getenv("DNS_SERVICE_NAME", "kube-dns"), DirectDNS: os.Getenv("DNS_DIRECT_ENDPOINTS") == "true"}
-	if raw := os.Getenv("PROXY_GATEWAY_JSON"); raw != "" {
-		decoder := json.NewDecoder(strings.NewReader(raw))
-		decoder.DisallowUnknownFields()
-		var gateway network.Gateway
-		if e = decoder.Decode(&gateway); e != nil {
-			return errors.New("invalid proxy gateway configuration")
-		}
-		provider.Gateway = &gateway
+	provider, e := network.FromEnvironment()
+	if e != nil {
+		return e
 	}
 	results := Check(ctx, c, Options{RuntimeClass: os.Getenv("RUNTIME_CLASS"), StorageClass: os.Getenv("STORAGE_CLASS"), Network: provider})
 	return Report(os.Stdout, results)
-}
-func getenv(k, fallback string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return fallback
 }
 func Report(w io.Writer, results []Result) error {
 	failed := false

@@ -7,6 +7,10 @@ existingSecret: controller-secrets
 automationAPI:
   enabled: false
 config:
+  # network-policy is experimental and requires independent dataplane qualification.
+  NETWORK_PROVIDER: cilium
+  NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED: 'false'
+  NETWORK_POLICY_CLUSTER_CIDRS_JSON: ''
   FORGEJO_ORIGIN: ''
   FORGEJO_OWNER: ''
   RUNTIME_CLASS: gvisor

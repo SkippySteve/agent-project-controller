@@ -113,3 +113,72 @@ func TestHelmPackage(t *testing.T) {
 		t.Fatal("mutable image accepted")
 	}
 }
+
+func TestHelmNetworkPolicyProfile(t *testing.T) {
+	if os.Getenv("APC_HELM_TEST") != "true" {
+		t.Skip("set APC_HELM_TEST=true with Helm installed")
+	}
+	values := map[string]any{"controllerImage": "registry.example.com/controller@sha256:" + strings.Repeat("a", 64), "workspaceImage": "registry.example.com/workspace@sha256:" + strings.Repeat("b", 64), "config": map[string]any{"FORGEJO_ORIGIN": "https://git.example.com", "FORGEJO_OWNER": "operator", "PUBLIC_ORIGIN": "https://projects.example.com", "OIDC_ISSUER": "https://identity.example.com/realm", "OIDC_CLIENT_ID": "projects", "NETWORK_PROVIDER": "cilium"}}
+	path := filepath.Join(t.TempDir(), "values.json")
+	write := func() {
+		b, _ := json.Marshal(values)
+		if err := os.WriteFile(path, b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	render := func() ([]byte, error) {
+		return exec.Command("helm", "template", "qualification", "../../charts/agent-project-controller", "-n", "test-control", "-f", path).CombinedOutput()
+	}
+	write()
+	output, err := render()
+	if err != nil {
+		t.Fatalf("default provider: %v: %s", err, output)
+	}
+	if !bytes.Contains(output, []byte("ciliumnetworkpolicies")) || bytes.Contains(output, []byte("resources: [networkpolicies]")) {
+		t.Fatal("default profile changed NetworkPolicy RBAC")
+	}
+	config := values["config"].(map[string]any)
+	config["NETWORK_PROVIDER"] = "network-policy"
+	for _, invalid := range []map[string]string{
+		{"NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED": "false", "NETWORK_POLICY_CLUSTER_CIDRS_JSON": `["10.0.0.0/8"]`},
+		{"NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED": "true", "NETWORK_POLICY_CLUSTER_CIDRS_JSON": ""},
+		{"NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED": "true", "NETWORK_POLICY_CLUSTER_CIDRS_JSON": "[]"},
+		{"NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED": "true", "NETWORK_POLICY_CLUSTER_CIDRS_JSON": "{"},
+	} {
+		for key, value := range invalid {
+			config[key] = value
+		}
+		write()
+		if _, err := render(); err == nil {
+			t.Fatalf("invalid network-policy values accepted: %v", invalid)
+		}
+	}
+	config["NETWORK_PROVIDER"] = "calico"
+	config["NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED"] = "true"
+	config["NETWORK_POLICY_CLUSTER_CIDRS_JSON"] = `["10.0.0.0/8"]`
+	write()
+	if _, err := render(); err == nil {
+		t.Fatal("unknown provider accepted")
+	}
+	config["NETWORK_PROVIDER"] = "network-policy"
+	write()
+	values["proxyGateway"] = map[string]any{"namespace": "edge", "selector": map[string]string{"app": "gateway"}, "port": 8443, "disableSNIFilter": false}
+	write()
+	if _, err := render(); err == nil {
+		t.Fatal("network-policy gateway without disableSNIFilter accepted")
+	}
+	values["proxyGateway"] = map[string]any{"namespace": "edge", "selector": map[string]string{"app": "gateway"}, "port": 8443, "disableSNIFilter": true}
+	write()
+	output, err = render()
+	if err != nil {
+		t.Fatalf("experimental profile: %v: %s", err, output)
+	}
+	for _, want := range []string{"resources: [networkpolicies]", "resources: [nodes]", "NETWORK_PROVIDER: \"network-policy\"", "NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED: \"true\"", `disableSNIFilter\":true`} {
+		if !bytes.Contains(output, []byte(want)) {
+			t.Fatalf("missing %s in %s", want, output)
+		}
+	}
+	if bytes.Contains(output, []byte("ciliumnetworkpolicies")) || bytes.Contains(output, []byte("cilium.io")) {
+		t.Fatal("experimental profile kept Cilium RBAC")
+	}
+}

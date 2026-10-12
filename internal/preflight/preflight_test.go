@@ -97,3 +97,31 @@ func TestPreflightRejectsRetainAndMissingRuntime(t *testing.T) {
 		}
 	}
 }
+
+type proxyNet struct{ quietNet }
+
+func (proxyNet) Capabilities() network.Capabilities {
+	return network.Capabilities{BypassPrevention: true, ServiceProxy: true}
+}
+
+func TestPreflightNamesNativeProviderSeparately(t *testing.T) {
+	scheme := preflightScheme(t)
+	policy := corev1.PersistentVolumeReclaimDelete
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		object(schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"}, "sandboxes.agents.x-k8s.io"),
+		object(schema.GroupVersionKind{Group: "node.k8s.io", Version: "v1", Kind: "RuntimeClass"}, "gvisor"),
+		&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "local-path"}, ReclaimPolicy: &policy},
+	).Build()
+	var out bytes.Buffer
+	if err := Report(&out, Check(context.Background(), c, Options{RuntimeClass: "gvisor", StorageClass: "local-path", Network: proxyNet{}})); err != nil {
+		t.Fatal(err, out.String())
+	}
+	if !strings.Contains(out.String(), "pass\tnetwork-policy-dns\t") || strings.Contains(out.String(), "cilium-dns") {
+		t.Fatal(out.String())
+	}
+	out.Reset()
+	failed := proxyNet{quietNet: quietNet{err: errors.New("node address is not excluded from proxy internet access")}}
+	if err := Report(&out, Check(context.Background(), c, Options{RuntimeClass: "gvisor", StorageClass: "local-path", Network: failed})); err == nil || !strings.Contains(out.String(), "fail\tnetwork-policy-dns\tnode address is not excluded") {
+		t.Fatal(err, out.String())
+	}
+}

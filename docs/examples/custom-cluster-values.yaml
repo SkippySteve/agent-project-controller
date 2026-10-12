@@ -1,5 +1,6 @@
 # Rendering example, not a qualified cluster profile. Replace image pins and
-# connection settings with your own. Cilium and Agent Sandbox remain required.
+# connection settings with your own. The qualified profile requires Cilium and
+# Agent Sandbox. See network-policy-values.yaml for the experimental profile.
 controllerImage: registry.example.org/controller@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 workspaceImage: registry.example.org/workspace@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 proxyImage: registry.example.org/proxy@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

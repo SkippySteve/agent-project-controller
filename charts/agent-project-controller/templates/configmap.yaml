@@ -19,6 +19,22 @@
 {{- if and .Values.proxyGateway (index .Values.config "PROXY_GATEWAY_JSON") }}
 {{- fail "use proxyGateway or config.PROXY_GATEWAY_JSON, not both" }}
 {{- end }}
+{{- $provider := default "cilium" (index .Values.config "NETWORK_PROVIDER") }}
+{{- if not (or (eq $provider "cilium") (eq $provider "network-policy")) }}
+{{- fail "NETWORK_PROVIDER must be cilium or network-policy" }}
+{{- end }}
+{{- if eq $provider "network-policy" }}
+{{- if ne (toString (index .Values.config "NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED")) "true" }}
+{{- fail "network-policy requires NETWORK_POLICY_ENFORCEMENT_ACKNOWLEDGED=true after an independent dataplane test" }}
+{{- end }}
+{{- $cidrs := required "network-policy requires NETWORK_POLICY_CLUSTER_CIDRS_JSON" (index .Values.config "NETWORK_POLICY_CLUSTER_CIDRS_JSON") | mustFromJson }}
+{{- if or (not (kindIs "slice" $cidrs)) (eq (len $cidrs) 0) }}
+{{- fail "network-policy requires a non-empty JSON array of cluster pod, service and node CIDRs" }}
+{{- end }}
+{{- if and (index .Values.proxyGateway "namespace") (not (index .Values.proxyGateway "disableSNIFilter")) }}
+{{- fail "network-policy cannot enforce gateway SNI; set proxyGateway.disableSNIFilter true" }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

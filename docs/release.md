@@ -1,6 +1,6 @@
 # Alpha release criteria
 
-The first release is `0.1.0-alpha.1`: Linux amd64 controller/operator CLI, Helm chart, dashboard, manual terminal workflow, and T3/Codex project interface. Deploy immutable image digests. It is a single-controller deployment with the qualified Cilium, inspecting proxy, gVisor, Forgejo and OIDC configuration described in [qualification](qualification.md).
+The first release is `0.1.0-alpha.1`: Linux amd64 controller/operator CLI, Helm chart, dashboard, manual terminal workflow, and T3/Codex project interface. Deploy immutable image digests. It is a single-controller deployment with the qualified Cilium, inspecting proxy, gVisor, Forgejo and OIDC configuration described in [qualification](qualification.md). The experimental `NETWORK_PROVIDER=network-policy` profile is not part of this alpha claim.
 
 A candidate is publishable only after all of these checks pass:
 
