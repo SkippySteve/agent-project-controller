@@ -20,9 +20,17 @@ When main protection is absent, the controller creates a rule that forbids direc
 
 Agents can perform operations supported by their Forgejo repository write permission. This is broader than the old broker's branch-ownership model. Protect additional release branches or tags explicitly if they matter. Main protection does not stop an agent from damaging its working branches, creating misleading PRs or disclosing source through permitted writes.
 
+### GitHub
+
+GitHub mode does not create or replace branch protection. Grant refuses the repository unless classic protection on `main` enforces rules for administrators, requires at least one approving review, restricts who can push, excludes this GitHub App from that allow list, and leaves force-push and branch deletion disabled. A missing rule or a ruleset-only repository is a refusal. The controller will not weaken an existing rule to make a grant succeed.
+
+Workspace credentials are installation access tokens for one repository. The requested permissions are contents write, pull requests write, and metadata read. The controller drops a token whose response names a different repository, selects every repository, or carries any other permission, and it revokes that token before returning the error. Tokens expire in about one hour. The process reuses a stored token only while its recorded expiry is more than 20 minutes away and GitHub still accepts it. Otherwise it revokes the stored token and mints a replacement. Restarting the controller forgets those expiry records, so the next grant rotates the stored token.
+
+GitHub does not list live installation tokens. A token that is issued and then lost before the ledger save, including a controller token held only in memory, stays valid until GitHub expires it. Removal confirms the stored workspace token and any token this process still remembers. It cannot confirm a token lost in a crash. The Forgejo host deletes orphaned personal tokens before issuing another; GitHub cannot do that.
+
 ## HTTPS enforcement
 
-Cilium restricts workers to their proxy and necessary DNS resolution. The proxy allows exact configured hosts, HTTP methods and literal path prefixes. DNS policy permits necessary exact names rather than arbitrary queries. Upstream TLS certificates are verified normally. Private upstream addresses are prohibited except for the operator-configured Forgejo host.
+Cilium restricts workers to their proxy and necessary DNS resolution. The proxy allows exact configured hosts, HTTP methods and literal path prefixes. DNS policy permits necessary exact names rather than arbitrary queries. Upstream TLS certificates are verified normally. Private upstream addresses are prohibited except for the operator-configured Forgejo host. GitHub mode leaves that exception empty, so `github.com` and `api.github.com` must resolve to public addresses.
 
 Project pods use an explicit CoreDNS service rather than inheriting the node-local resolver. This keeps their resolver selection consistent with endpoint-scoped DNS policy. Node-local interception and service routing still require dataplane qualification. The controller rejects unsupported resolver settings and does not grant unrestricted host DNS access.
 
@@ -41,6 +49,8 @@ Each project has an inspection CA with a one-year lifetime. Leaf certificates re
 The controller persists the external identity before any grant. If it crashes after token creation but before saving the token value, the next attempt removes orphaned tokens before issuing another. Deleting the credential ledger manually breaks this recovery guarantee.
 
 Removal requests suspend the Sandbox and terminate owned pods, revoke collaborator access, delete tokens and disable the Forgejo identity. An unavailable Forgejo instance leaves removal pending. Kubernetes resources and storage are retained until external revocation succeeds. The namespace is then deleted, and any matching persistent volume keeps cleanup pending until the storage provisioner removes it. Finalizers prevent normal object deletion from skipping this process.
+
+GitHub removal deletes the stored installation token and reads the repository again with that token. HTTP 401 or 404 confirms revocation. HTTP 200 leaves removal pending. There is no GitHub user to disable. The repository, its branches, and its pull requests stay. An installation token that was never written to the ledger can remain usable for up to about an hour.
 
 After verified cleanup the controller removes stored token, password and private CA material, keeping a small revoked tombstone. Disabled Forgejo users preserve PR attribution and are intentionally retained. Immutable audit records have separate retention. Removing a project does not delete the original Forgejo repository or its branches and PRs.
 

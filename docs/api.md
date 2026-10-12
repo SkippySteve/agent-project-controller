@@ -42,6 +42,6 @@ Normal Kubernetes deletion triggers the cleanup finalizer. The dashboard uses th
 
 ## Extending providers
 
-`internal/forgejo.Host` defines discovery, grant and revocation. `internal/network.Provider` declares capabilities, produces enforcement objects and supplies pod DNS settings that agree with its DNS enforcement. The inspecting proxy is a separate Go component with a policy document. Provider implementations must qualify their actual behavior before being advertised as supported.
+`internal/forgejo.Host` defines discovery, grant and revocation. The controller selects one implementation for the process, Forgejo or GitHub, and a workspace does not choose the host. `internal/network.Provider` declares capabilities, produces enforcement objects and supplies pod DNS settings that agree with its DNS enforcement. The inspecting proxy is a separate Go component with a policy document. Provider implementations must qualify their actual behavior before being advertised as supported.
 
 The first implementation uses an operator-selected worker image as its environment template. It does not expose multiple named templates. SSH and OpenRig are not installed. A tool that can run `kubectl exec` can use a Ready workspace. That command is not an authenticated model session. Model access is an optional Secret named `model-access` in the project namespace, mounted read-only at `/run/model`. The controller rejects a refresh token in that Secret. Model hosts belong in the immutable HTTPS policy at creation.

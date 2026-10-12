@@ -44,6 +44,9 @@ func New(origin, owner, token string) (*Client, error) {
 	if e != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return nil, errors.New("Forgejo origin must be an HTTPS origin")
 	}
+	if host := strings.ToLower(u.Hostname()); host == "github.com" || host == "api.github.com" {
+		return nil, errors.New("use GIT_HOST=github for GitHub")
+	}
 	if !namePattern.MatchString(owner) || strings.TrimSpace(token) == "" {
 		return nil, errors.New("Forgejo owner and administrative token are required")
 	}

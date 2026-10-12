@@ -2,7 +2,12 @@ Install Agent Sandbox and the qualified Cilium/runtime/storage profile before re
 This alpha package serves the dashboard and API from the same controller process.
 Expose Service controller port 8080 through your existing HTTPS ingress or Gateway.
 Configure the OIDC callback as {{ .Values.config.PUBLIC_ORIGIN }}/auth/callback.
+{{- $gitHost := default "forgejo" (index .Values.config "GIT_HOST" | toString) }}
+{{- if eq $gitHost "github" }}
+The existing Secret {{ .Values.existingSecret }} requires github-app-private-key and oidc-client-secret. GitHub is an optional project host, not the qualified profile.
+{{- else }}
 The existing Secret {{ .Values.existingSecret }} requires forgejo-token and oidc-client-secret.
+{{- end }}
 {{ if .Values.automationAPI.enabled }}It also requires api-secret of at least 32 characters.{{ end }}
 The chart does not install prerequisites, create provider credentials or migrate broker projects.
 Only one controller release is supported per namespace.

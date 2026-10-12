@@ -13,7 +13,7 @@ These images were built from commit `6d754c47f223edbe5bfff399405fb1450abb0c4b` a
 
 Deploy those digests. The tags `0.1.0-alpha.1` and `6d754c47f223edbe5bfff399405fb1450abb0c4b` point at the same images. [docs/examples/alpha-values.yaml](docs/examples/alpha-values.yaml) is a Helm values file with those pins. Replace the Forgejo origin, owner, runtime class, storage class, public origin and OIDC client, and create the `controller-secrets` Secret yourself. The chart does not install Agent Sandbox, Cilium, gVisor, Forgejo or an identity provider.
 
-Current `main` also contains workspace-image replacement and an experimental standard NetworkPolicy provider. Neither behavior is in the `0.1.0-alpha.1` images. Rebuild from the commit you intend to run before relying on it. The NetworkPolicy provider is opt-in and is not a qualified dataplane. The qualified profile remains Cilium with gVisor.
+Current `main` also contains workspace-image replacement, an experimental standard NetworkPolicy provider, and an optional GitHub project host. None of those behaviors are in the `0.1.0-alpha.1` images. Rebuild from the commit you intend to run before relying on it. The NetworkPolicy provider is opt-in and is not a qualified dataplane. GitHub replaces Forgejo as the place one controller stores projects; it is not part of the qualified profile, and one controller uses one host. The qualified profile remains Cilium, gVisor, and Forgejo.
 
 An alpha pilot has run on a live Cilium and gVisor cluster with upstream Agent Sandbox. The qualified combination is Kubernetes 1.36.2, Agent Sandbox 1.0.4, Cilium 1.19.5, gVisor, Forgejo 15.0.9 and Authentik 2026.5.6. See [installation](docs/installation.md), [security boundaries](docs/security.md), [API](docs/api.md) and [qualification](docs/qualification.md) for the evidence and the remaining limits. Deploy digest-pinned images. The moving `:pilot` tag is not the published release.
 
@@ -43,7 +43,7 @@ Pause preserves project data. Removal has an explicit retention policy. A failed
 - The ProjectWorkspace custom resource records repository, immutable HTTPS policy and desired lifecycle. This is this project's API, not an upstream Agent Sandbox resource.
 - Start with core Sandbox resources. Add optional upstream templates, claims or warm pools only when needed.
 - Build a documented HTTP API with a small dashboard as one client.
-- Integrate Forgejo first through a Git-host interface that can support other hosts later.
+- Forgejo and GitHub share one Git-host interface. A controller process selects one of them. GitHub is optional and is not the qualified profile.
 - Reconcile interrupted operations safely and record auditable status without logging secrets.
 
 ## Security boundaries

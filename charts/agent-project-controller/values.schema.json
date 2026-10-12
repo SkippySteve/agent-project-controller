@@ -369,6 +369,21 @@
         },
         "NETWORK_POLICY_CLUSTER_CIDRS_JSON": {
           "type": "string"
+        },
+        "GIT_HOST": {
+          "enum": ["forgejo", "github"]
+        },
+        "GITHUB_OWNER": {
+          "type": "string",
+          "minLength": 1
+        },
+        "GITHUB_APP_ID": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "GITHUB_APP_INSTALLATION_ID": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
         }
       },
       "allOf": [
@@ -394,6 +409,23 @@
                 "minLength": 2
               }
             }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "GIT_HOST": {
+                "const": "github"
+              }
+            },
+            "required": ["GIT_HOST"]
+          },
+          "then": {
+            "required": [
+              "GITHUB_OWNER",
+              "GITHUB_APP_ID",
+              "GITHUB_APP_INSTALLATION_ID"
+            ]
           }
         }
       ]

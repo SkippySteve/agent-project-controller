@@ -1,7 +1,8 @@
 # Published 0.1.0-alpha.1 images for charts/agent-project-controller.
 # Built from 6d754c47f223edbe5bfff399405fb1450abb0c4b. Current main adds
-# workspace-image replacement and an experimental NetworkPolicy provider;
-# those behaviors are not in these images.
+# workspace-image replacement, an experimental NetworkPolicy provider, and
+# an optional GitHub project host. Those behaviors are not in these images.
+# GitHub hosting is documented in github-values.yaml and needs its own build.
 #
 # Replace the Forgejo origin, owner, runtime class, storage class, public
 # origin and OIDC client before installing. Create Secret controller-secrets

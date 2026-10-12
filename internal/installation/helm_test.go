@@ -182,3 +182,61 @@ func TestHelmNetworkPolicyProfile(t *testing.T) {
 		t.Fatal("experimental profile kept Cilium RBAC")
 	}
 }
+
+func TestHelmGitHubHost(t *testing.T) {
+	if os.Getenv("APC_HELM_TEST") != "true" {
+		t.Skip("set APC_HELM_TEST=true with Helm installed")
+	}
+	config := map[string]any{"GIT_HOST": "github", "GITHUB_OWNER": "owner", "GITHUB_APP_ID": "12345", "GITHUB_APP_INSTALLATION_ID": "99", "PUBLIC_ORIGIN": "https://projects.example.com", "OIDC_ISSUER": "https://identity.example.com/realm", "OIDC_CLIENT_ID": "projects", "FORGEJO_ORIGIN": "", "FORGEJO_OWNER": ""}
+	values := map[string]any{"controllerImage": "registry.example.com/controller@sha256:" + strings.Repeat("a", 64), "workspaceImage": "registry.example.com/workspace@sha256:" + strings.Repeat("b", 64), "config": config}
+	path := filepath.Join(t.TempDir(), "values.json")
+	write := func() {
+		b, _ := json.Marshal(values)
+		if err := os.WriteFile(path, b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	render := func() ([]byte, error) {
+		return exec.Command("helm", "template", "qualification", "../../charts/agent-project-controller", "-n", "test-control", "-f", path).CombinedOutput()
+	}
+	write()
+	output, err := render()
+	if err != nil {
+		t.Fatalf("github host: %v: %s", err, output)
+	}
+	for _, want := range []string{"GIT_HOST: \"github\"", "GITHUB_OWNER: \"owner\"", "GITHUB_APP_ID: \"12345\"", "GITHUB_APP_INSTALLATION_ID: \"99\"", "name: GITHUB_APP_PRIVATE_KEY_FILE", "value: /control-secrets/github-app-private-key"} {
+		if !bytes.Contains(output, []byte(want)) {
+			t.Fatalf("missing %s in %s", want, output)
+		}
+	}
+	if bytes.Contains(output, []byte("FORGEJO_TOKEN_FILE")) || bytes.Contains(output, []byte("FORGEJO_ORIGIN")) || bytes.Contains(output, []byte("FORGEJO_OWNER")) {
+		t.Fatalf("github host kept Forgejo settings: %s", output)
+	}
+	for _, invalid := range []map[string]string{
+		{"GITHUB_APP_ID": ""},
+		{"GITHUB_APP_ID": "0"},
+		{"GITHUB_APP_INSTALLATION_ID": "01"},
+		{"GIT_HOST": "gitlab"},
+		{"FORGEJO_ORIGIN": "https://git.example.com"},
+	} {
+		saved := map[string]any{}
+		for key, value := range invalid {
+			saved[key] = config[key]
+			config[key] = value
+		}
+		write()
+		if _, err := render(); err == nil {
+			t.Fatalf("invalid github values accepted: %v", invalid)
+		}
+		for key, value := range saved {
+			config[key] = value
+		}
+	}
+	config["GIT_HOST"] = "forgejo"
+	config["FORGEJO_ORIGIN"] = "https://git.example.com"
+	config["FORGEJO_OWNER"] = "operator"
+	write()
+	if _, err := render(); err == nil {
+		t.Fatal("forgejo host accepted GitHub App settings")
+	}
+}

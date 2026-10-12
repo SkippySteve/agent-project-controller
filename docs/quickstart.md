@@ -2,7 +2,7 @@
 
 Install public release `0.1.0-alpha.1` on a cluster you already administer. These commands use the Linux amd64 CLI and Helm chart from that release, and the images built from commit `6d754c47f223edbe5bfff399405fb1450abb0c4b`.
 
-The chart does not install Kubernetes, Agent Sandbox, Cilium, gVisor, Forgejo, or an identity provider. The qualified combination is recorded in [installation](installation.md). Another cluster still needs its own qualification. Workspace-image replacement and the experimental NetworkPolicy provider are on current `main` and are not in this release. Leave `NETWORK_PROVIDER` at `cilium`.
+The chart does not install Kubernetes, Agent Sandbox, Cilium, gVisor, Forgejo, or an identity provider. The qualified combination is recorded in [installation](installation.md). Another cluster still needs its own qualification. Workspace-image replacement, the experimental NetworkPolicy provider, and the optional GitHub project host are on current `main` and are not in this release. Leave `NETWORK_PROVIDER` at `cilium` and leave the project host on Forgejo.
 
 ## Download
 
