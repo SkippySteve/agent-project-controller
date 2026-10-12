@@ -1,6 +1,6 @@
 # Installation
 
-Deploy first in a disposable qualification cluster. This initial implementation is not a qualified production replacement for an existing broker.
+Deploy first in a disposable qualification cluster. This initial implementation is not a qualified production replacement for an existing broker. The [quickstart](quickstart.md) is the public `0.1.0-alpha.1` install path.
 
 ## Prerequisites
 
