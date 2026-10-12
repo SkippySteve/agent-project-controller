@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"net/http"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -19,10 +19,7 @@ import (
 	"time"
 
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/connect"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -73,39 +70,32 @@ func Launch(ctx context.Context, c client.Client, config *rest.Config, control, 
 		case <-time.After(time.Second):
 		}
 	}
-	clientset, err := kubernetes.NewForConfig(config)
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		return err
 	}
-	endpoint := clientset.CoreV1().RESTClient().Post().Resource("pods").Namespace(pod.Namespace).Name(pod.Name).SubResource("portforward").URL()
-	transport, upgrader, err := spdy.RoundTripperFor(config)
-	if err != nil {
-		return err
-	}
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", endpoint)
-	stop := make(chan struct{})
-	defer close(stop)
-	ready := make(chan struct{})
-	forward, err := portforward.NewOnAddresses(dialer, []string{"127.0.0.1"}, []string{"0:8788"}, stop, ready, io.Discard, io.Discard)
-	if err != nil {
-		return err
-	}
+	defer listener.Close()
 	forwardDone := make(chan error, 1)
-	go func() { forwardDone <- forward.ForwardPorts() }()
-	select {
-	case <-ready:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(30 * time.Second):
-		return errors.New("T3 local tunnel did not start")
-	case <-forwardDone:
-		return errors.New("T3 local tunnel failed")
-	}
-	ports, err := forward.GetPorts()
-	if err != nil || len(ports) != 1 {
-		return errors.New("T3 local port unavailable")
-	}
-	port := strconv.Itoa(int(ports[0].Local))
+	slots := make(chan struct{}, 16)
+	go func() {
+		for {
+			conn, e := listener.AcceptTCP()
+			if e != nil {
+				forwardDone <- e
+				return
+			}
+			select {
+			case slots <- struct{}{}:
+				go func() {
+					defer func() { conn.Close(); <-slots }()
+					_ = connect.Exec(ctx, config, pod.Namespace, pod.Name, []string{"/usr/local/bin/agent-project-controller", "t3-relay"}, conn, conn, io.Discard, false)
+				}()
+			default:
+				conn.Close()
+			}
+		}
+	}()
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
 	address := "127.0.0.1:" + port
 	var pairing bytes.Buffer
 	var pairErr error
