@@ -25,7 +25,6 @@ config:
   # Kubernetes default name should use kube-dns instead.
   DNS_SERVICE_NAME: coredns
   DNS_DIRECT_ENDPOINTS: 'true'
-  PROXY_GATEWAY_JSON: '{"namespace":"traefik-system","selector":{"app.kubernetes.io/name":"traefik"},"port":8443,"disableSNIFilter":true}'
   PUBLIC_ORIGIN: https://projects.example.com
   OIDC_ISSUER: https://auth.example.com/application/o/agent-project-controller/
   OIDC_CLIENT_ID: replace-with-the-public-client-id
@@ -34,3 +33,11 @@ config:
   OIDC_SCOPES: profile,groups
   ALLOW_STATIC_LOGIN: 'false'
   OTEL_ENABLED: 'false'
+# Optional backend gateway exception for the inspecting proxy. Adapt all
+# fields to the gateway pods actually handling your Forgejo HTTPS connection.
+proxyGateway:
+  namespace: traefik-system
+  selector:
+    app.kubernetes.io/name: traefik
+  port: 8443
+  disableSNIFilter: true

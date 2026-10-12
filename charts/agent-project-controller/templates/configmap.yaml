@@ -1,4 +1,4 @@
-{{- range $key := list "CONTROL_NAMESPACE" "WORKSPACE_IMAGE" "PROXY_IMAGE" "LISTEN_ADDR" "FORGEJO_TOKEN_FILE" "OIDC_CLIENT_SECRET_FILE" "API_SECRET_FILE" }}
+{{- range $key := list "CONTROL_NAMESPACE" "WORKSPACE_IMAGE" "PROXY_IMAGE" "LISTEN_ADDR" "FORGEJO_TOKEN_FILE" "OIDC_CLIENT_SECRET_FILE" "API_SECRET_FILE" "WORKSPACE_SCHEDULING_JSON" "PROXY_SCHEDULING_JSON" }}
 {{- if hasKey $.Values.config $key }}
 {{- fail (printf "config.%s is managed by the chart; use the corresponding chart setting" $key) }}
 {{- end }}
@@ -16,6 +16,9 @@
 {{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $proxyImage) }}
 {{- fail "proxyImage must use @sha256:<64 lowercase hex characters>" }}
 {{- end }}
+{{- if and .Values.proxyGateway (index .Values.config "PROXY_GATEWAY_JSON") }}
+{{- fail "use proxyGateway or config.PROXY_GATEWAY_JSON, not both" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -25,6 +28,13 @@ data:
   LISTEN_ADDR: "0.0.0.0:8080"
   PROXY_IMAGE: {{ $proxyImage | quote }}
   WORKSPACE_IMAGE: {{ .Values.workspaceImage | quote }}
+  WORKSPACE_SCHEDULING_JSON: {{ toJson .Values.workspaceScheduling | quote }}
+  PROXY_SCHEDULING_JSON: {{ toJson .Values.proxyScheduling | quote }}
+{{- if .Values.proxyGateway }}
+  PROXY_GATEWAY_JSON: {{ toJson .Values.proxyGateway | quote }}
+{{- end }}
 {{- range $key, $value := .Values.config }}
+{{- if not (and (eq $key "PROXY_GATEWAY_JSON") $.Values.proxyGateway) }}
   {{ $key }}: {{ $value | toString | quote }}
+{{- end }}
 {{- end }}

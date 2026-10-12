@@ -164,7 +164,15 @@ func run(ctx context.Context) error {
 	if e := networkProvider.Validate(); e != nil {
 		return e
 	}
-	reconciler := &controller.Reconciler{Client: direct, Host: host, Network: networkProvider, Config: controller.Config{Namespace: ns, ForgejoOrigin: host.Origin, Owner: host.Owner, Image: os.Getenv("WORKSPACE_IMAGE"), ProxyImage: os.Getenv("PROXY_IMAGE"), RuntimeClass: os.Getenv("RUNTIME_CLASS"), StorageClass: os.Getenv("STORAGE_CLASS"), StorageSize: env("STORAGE_SIZE", "10Gi"), WorkerResources: profile("WORKSPACE"), ProxyResources: profile("PROXY")}}
+	workerScheduling, e := controller.ParseScheduling(os.Getenv("WORKSPACE_SCHEDULING_JSON"))
+	if e != nil {
+		return fmt.Errorf("workspace scheduling: %w", e)
+	}
+	proxyScheduling, e := controller.ParseScheduling(os.Getenv("PROXY_SCHEDULING_JSON"))
+	if e != nil {
+		return fmt.Errorf("proxy scheduling: %w", e)
+	}
+	reconciler := &controller.Reconciler{Client: direct, Host: host, Network: networkProvider, Config: controller.Config{Namespace: ns, ForgejoOrigin: host.Origin, Owner: host.Owner, Image: os.Getenv("WORKSPACE_IMAGE"), ProxyImage: os.Getenv("PROXY_IMAGE"), RuntimeClass: os.Getenv("RUNTIME_CLASS"), StorageClass: os.Getenv("STORAGE_CLASS"), StorageSize: env("STORAGE_SIZE", "10Gi"), WorkerResources: profile("WORKSPACE"), ProxyResources: profile("PROXY"), WorkerScheduling: workerScheduling, ProxyScheduling: proxyScheduling}}
 	if e = reconciler.Config.Validate(); e != nil {
 		return e
 	}

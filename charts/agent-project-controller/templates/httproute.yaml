@@ -1,0 +1,15 @@
+{{- if .Values.routing.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: project-dashboard
+spec:
+  parentRefs:
+{{ toYaml (required "routing.parentRefs is required when routing.enabled=true" .Values.routing.parentRefs) | indent 4 }}
+  hostnames:
+{{ toYaml (required "routing.hostnames is required when routing.enabled=true" .Values.routing.hostnames) | indent 4 }}
+  rules:
+    - backendRefs:
+        - name: controller
+          port: 8080
+{{- end }}

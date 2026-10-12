@@ -49,6 +49,7 @@ type Config struct {
 	ProxyImage                                                         string
 	StorageSize                                                        string
 	WorkerResources, ProxyResources                                    ResourceProfile
+	WorkerScheduling, ProxyScheduling                                  Scheduling
 }
 
 func (c Config) Validate() error {
@@ -57,6 +58,11 @@ func (c Config) Validate() error {
 	}
 	if q, e := resource.ParseQuantity(c.StorageSize); e != nil || q.Sign() <= 0 {
 		return errors.New("invalid storage size")
+	}
+	for _, placement := range []Scheduling{c.WorkerScheduling, c.ProxyScheduling} {
+		if err := placement.Validate(); err != nil {
+			return err
+		}
 	}
 	if _, _, e := c.resources(); e != nil {
 		return e
@@ -962,6 +968,7 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 	plabels := labels(w)
 	plabels["projects.agentwork.dev/role"] = "proxy"
 	proxyDeployment := &appsv1.Deployment{ObjectMeta: metadata(w, "proxy"), Spec: appsv1.DeploymentSpec{Replicas: int32p(1), Selector: &metav1.LabelSelector{MatchLabels: plabels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: plabels}, Spec: corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(1), SecurityContext: &corev1.PodSecurityContext{FSGroup: int64p(1000)}, Containers: []corev1.Container{{Name: "proxy", Image: r.Config.proxyImage(), Args: []string{"proxy"}, SecurityContext: security, Resources: proxyResources, Ports: []corev1.ContainerPort{{ContainerPort: 3128}}, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: fromInt(3128)}}}, VolumeMounts: []corev1.VolumeMount{{Name: "tls", MountPath: "/tls", ReadOnly: true}, {Name: "policy", MountPath: "/policy", ReadOnly: true}}}}, Volumes: []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "proxy-ca", DefaultMode: int32p(0440)}}}, {Name: "policy", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "proxy-policy"}}}}}}}}}
+	r.Config.ProxyScheduling.Apply(&proxyDeployment.Spec.Template.Spec)
 	objects = append(objects, proxyDeployment)
 	u, _ := url.Parse(r.Config.ForgejoOrigin)
 	env := []corev1.EnvVar{{Name: "HOME", Value: "/workspace/home"}, {Name: "GIT_ORIGIN", Value: r.Config.ForgejoOrigin}, {Name: "GIT_HOST", Value: u.Host}, {Name: "GIT_REPOSITORY", Value: w.Spec.Repository}, {Name: "GIT_WORK_BRANCH", Value: "agent/" + identity(w)}, {Name: "GIT_TERMINAL_PROMPT", Value: "0"}, {Name: "HTTPS_PROXY", Value: "http://proxy:3128"}, {Name: "https_proxy", Value: "http://proxy:3128"}, {Name: "HTTP_PROXY", Value: "http://proxy:3128"}, {Name: "http_proxy", Value: "http://proxy:3128"}, {Name: "SSL_CERT_FILE", Value: "/workspace/home/ca-bundle.crt"}, {Name: "NODE_EXTRA_CA_CERTS", Value: "/trust/ca.crt"}, {Name: "REQUESTS_CA_BUNDLE", Value: "/workspace/home/ca-bundle.crt"}}
@@ -969,6 +976,7 @@ func (r *Reconciler) objects(ctx context.Context, w *api.ProjectWorkspace, s *co
 	workerlabels := labels(w)
 	workerlabels["projects.agentwork.dev/role"] = "worker"
 	spec := corev1.PodSpec{DNSPolicy: corev1.DNSNone, DNSConfig: dns, RuntimeClassName: &r.Config.RuntimeClass, AutomountServiceAccountToken: boolp(false), ServiceAccountName: "worker", TerminationGracePeriodSeconds: int64p(5), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolp(true), RunAsUser: int64p(1000), RunAsGroup: int64p(1000), FSGroup: int64p(1000)}, InitContainers: []corev1.Container{{Name: "clone", Image: r.Config.Image, Args: []string{"bootstrap"}, Env: env, SecurityContext: security, Resources: workerResources, VolumeMounts: mounts}}, Containers: []corev1.Container{{Name: "workspace", Image: r.Config.Image, Command: []string{"/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done"}, Env: env, WorkingDir: "/workspace/repo", SecurityContext: security, Resources: workerResources, VolumeMounts: mounts, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"test", "-f", "/workspace/.ready"}}}}}}, Volumes: []corev1.Volume{{Name: "workspace", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "workspace"}}}, {Name: "identity", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "git-identity", DefaultMode: int32p(0440)}}}, {Name: "trust", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "trust"}}}}, {Name: "model", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "model-access", Optional: boolp(true), DefaultMode: int32p(0440)}}}, {Name: "scratch", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}}
+	r.Config.WorkerScheduling.Apply(&spec)
 	b, e := json.Marshal(spec)
 	if e != nil {
 		return e

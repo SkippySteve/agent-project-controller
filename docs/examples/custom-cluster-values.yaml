@@ -1,0 +1,46 @@
+# Rendering example, not a qualified cluster profile. Replace image pins and
+# connection settings with your own. Cilium and Agent Sandbox remain required.
+controllerImage: registry.example.org/controller@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+workspaceImage: registry.example.org/workspace@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+proxyImage: registry.example.org/proxy@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+config:
+  FORGEJO_ORIGIN: https://git.example.org
+  FORGEJO_OWNER: team
+  RUNTIME_CLASS: isolated-runtime
+  STORAGE_CLASS: delete-csi
+  STORAGE_SIZE: 20Gi
+  CLUSTER_DOMAIN: example.internal
+  DNS_SERVICE_NAMESPACE: dns-system
+  DNS_SERVICE_NAME: project-dns
+  DNS_DIRECT_ENDPOINTS: 'true'
+  PUBLIC_ORIGIN: https://projects.example.org
+  OIDC_ISSUER: https://identity.example.org/realm
+  OIDC_CLIENT_ID: projects
+controllerScheduling:
+  nodeSelector:
+    pool: control
+workspaceScheduling:
+  nodeSelector:
+    pool: agents
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: agents
+      effect: NoSchedule
+proxyScheduling:
+  nodeSelector:
+    pool: proxies
+proxyGateway:
+  namespace: edge
+  selector:
+    app: https-gateway
+  port: 9443
+  disableSNIFilter: false
+routing:
+  enabled: true
+  hostnames:
+    - projects.example.org
+  parentRefs:
+    - name: existing-gateway
+      namespace: edge
+      sectionName: https
