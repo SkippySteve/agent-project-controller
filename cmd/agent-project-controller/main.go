@@ -76,6 +76,8 @@ func run(ctx context.Context) error {
 				return errors.New("T3 launch instance required")
 			}
 			return t3.Stop(os.Args[2])
+		case "t3-relay":
+			return t3.Relay()
 		case "t3-codex":
 			return t3.Codex(os.Args[2:])
 		case "bootstrap":
