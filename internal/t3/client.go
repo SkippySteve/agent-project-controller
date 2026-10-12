@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -49,6 +48,31 @@ func Launch(ctx context.Context, c client.Client, config *rest.Config, control, 
 		defer stopCancel()
 		_ = connect.Exec(stopCtx, config, pod.Namespace, pod.Name, []string{"/usr/local/bin/agent-project-controller", "t3-stop", instance}, nil, io.Discard, io.Discard, false)
 	}()
+	// Wait inside the worker. Dialing the forwarding listener before the remote
+	// server is ready can close the entire forwarding session.
+	for i := 0; ; i++ {
+		select {
+		case <-serverDone:
+			return errors.New("T3 server exited; verify the workspace image")
+		default:
+		}
+		probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
+		e := connect.Exec(probeCtx, config, pod.Namespace, pod.Name, []string{"/usr/bin/curl", "--noproxy", "*", "--fail", "--silent", "--max-time", "2", "--output", "/dev/null", "http://127.0.0.1:8788/"}, nil, io.Discard, io.Discard, false)
+		probeCancel()
+		if e == nil {
+			break
+		}
+		if i == 59 {
+			return errors.New("T3 server did not become ready")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-serverDone:
+			return errors.New("T3 server exited; verify the workspace image")
+		case <-time.After(time.Second):
+		}
+	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return err
@@ -83,25 +107,6 @@ func Launch(ctx context.Context, c client.Client, config *rest.Config, control, 
 	}
 	port := strconv.Itoa(int(ports[0].Local))
 	address := "127.0.0.1:" + port
-	for i := 0; i < 60; i++ {
-		conn, e := net.DialTimeout("tcp", address, time.Second)
-		if e == nil {
-			conn.Close()
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-serverDone:
-			return errors.New("T3 server exited; verify the workspace image")
-		case <-time.After(time.Second):
-		}
-		if i == 59 {
-			return errors.New("T3 server did not become ready")
-		}
-	}
-	// A port-forward listener accepts connections before the remote server is ready.
-	// Pairing creation retries until T3's database has initialized.
 	var pairing bytes.Buffer
 	var pairErr error
 	for i := 0; i < 30; i++ {

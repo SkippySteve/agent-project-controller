@@ -2,8 +2,13 @@ package connect
 
 import (
 	"context"
+	"io"
+	"k8s.io/client-go/rest"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -61,5 +66,38 @@ func TestPodRequiresReadySingleton(t *testing.T) {
 	}
 	if _, _, e = Pod(context.Background(), c, "control", "project"); e == nil || !strings.Contains(e.Error(), "exactly one") {
 		t.Fatal(e)
+	}
+}
+
+func TestExecRequestsOnlySuppliedStdinStream(t *testing.T) {
+	for _, supplied := range []bool{false, true} {
+		t.Run(map[bool]string{false: "headless", true: "interactive"}[supplied], func(t *testing.T) {
+			requests := make(chan *http.Request, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- r
+				http.Error(w, "fixture rejects upgrade", http.StatusBadRequest)
+			}))
+			defer server.Close()
+			var input io.Reader
+			if supplied {
+				input = strings.NewReader("fixture")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := Exec(ctx, &rest.Config{Host: server.URL}, "control", "worker", []string{"true"}, input, io.Discard, io.Discard, false); err == nil {
+				t.Fatal("fixture upgrade unexpectedly accepted")
+			}
+			select {
+			case r := <-requests:
+				if (r.URL.Query().Get("stdin") == "true") != supplied {
+					t.Fatalf("stdin request mismatches supplied input: %v", r.URL.Query())
+				}
+				if r.URL.Query().Get("container") != "workspace" {
+					t.Fatal("wrong worker container")
+				}
+			case <-ctx.Done():
+				t.Fatal("exec request did not reach fixture")
+			}
+		})
 	}
 }
