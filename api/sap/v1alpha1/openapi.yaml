@@ -1,0 +1,188 @@
+openapi: 3.0.3
+info:
+  title: Sandbox Access Protocol
+  version: v1alpha1
+  description: |
+    Operator-facing discovery and attach contract for agent sandboxes.
+    It stays above the sandbox runtime (sandboxd ProcessService and FilesystemService)
+    and below a product client. Authentication is an access-plane concern;
+    this reference uses a bearer token.
+servers:
+  - url: /
+paths:
+  /sap/v1/sandboxes:
+    get:
+      operationId: listSandboxes
+      summary: List sandboxes the caller may see
+      responses:
+        "200":
+          description: Visible sandboxes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxList"
+        "401":
+          $ref: "#/components/responses/Error"
+  /sap/v1/sandboxes/{namespace}/{name}:
+    get:
+      operationId: getSandbox
+      summary: Read one sandbox
+      parameters:
+        - $ref: "#/components/parameters/Namespace"
+        - $ref: "#/components/parameters/Name"
+      responses:
+        "200":
+          description: The sandbox
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sandbox"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /sap/v1/sandboxes/{namespace}/{name}/attach:
+    get:
+      operationId: attachSandbox
+      summary: Attach a bidirectional session
+      description: |
+        Upgrades to WebSocket subprotocol `sap.v1`. Frames are JSON text.
+        `data` is standard base64. The terminal channel does not accept a command.
+        `channel=control` is reserved and is not advertised by this reference plane.
+      parameters:
+        - $ref: "#/components/parameters/Namespace"
+        - $ref: "#/components/parameters/Name"
+        - name: channel
+          in: query
+          schema:
+            type: string
+            enum: [terminal, control]
+            default: terminal
+      responses:
+        "101":
+          description: Switching protocols
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+components:
+  parameters:
+    Namespace:
+      name: namespace
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        maxLength: 63
+    Name:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        maxLength: 63
+  responses:
+    Error:
+      description: Request rejected
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: string
+  schemas:
+    SandboxList:
+      type: object
+      required: [apiVersion, kind, items]
+      properties:
+        apiVersion:
+          type: string
+          enum: ["sandboxaccess.agents.x-k8s.io/v1alpha1"]
+        kind:
+          type: string
+          enum: [SandboxList]
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Sandbox"
+    Sandbox:
+      type: object
+      required: [apiVersion, kind, id, namespace, name, phase, activity, channels]
+      properties:
+        apiVersion:
+          type: string
+          enum: ["sandboxaccess.agents.x-k8s.io/v1alpha1"]
+        kind:
+          type: string
+          enum: [Sandbox]
+        id:
+          type: string
+          description: DNS-1123 sandbox name. Equal to name. Suitable for X-Sandbox-ID.
+        namespace:
+          type: string
+        name:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        phase:
+          type: string
+          enum: [Pending, Ready, Paused, Blocked, Terminating]
+        activity:
+          type: string
+          enum: [idle, working, waiting, blocked]
+        lastActivity:
+          type: string
+          format: date-time
+        project:
+          type: string
+        owner:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+            enum: [terminal, control]
+    Frame:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [input, output, resize, status, exit, error, close]
+        data:
+          type: string
+          description: Standard base64 of at most 32 KiB.
+        stream:
+          type: string
+          enum: [stdout]
+        cols:
+          type: integer
+          minimum: 1
+          maximum: 512
+        rows:
+          type: integer
+          minimum: 1
+          maximum: 512
+        code:
+          type: integer
+        activity:
+          type: string
+        lastActivity:
+          type: string
+          format: date-time
+        message:
+          type: string
+        channel:
+          type: string

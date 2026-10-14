@@ -17,6 +17,7 @@ Automation can use an explicitly configured bearer secret. OIDC access tokens ar
 - `PATCH /api/v1/workspaces/{name}` sets `desiredState` to `Running`, `Paused` or `Removed`. Include the current `resourceVersion`; a stale request returns 409.
 - `PATCH /api/v1/workspaces/{name}/access` replaces optional HTTPS policy with `https`, optional `registries` and current `resourceVersion`. It requires observed Paused state, an applied previous policy and no project pods. Saving leaves the project paused. Stale, running or unconverged requests return 409.
 - `GET /api/v1/workspaces/{name}/audit` returns persisted lifecycle and condition records, including diagnostic `reason` and `message` when available.
+- `GET /sap/v1/sandboxes` and `GET /sap/v1/sandboxes/{namespace}/{name}` discover project sandboxes for an authenticated operator. `GET /sap/v1/sandboxes/{namespace}/{name}/attach` upgrades to the Sandbox Access Protocol terminal stream. See [SAP](sap.md).
 
 ```json
 {
@@ -31,7 +32,7 @@ Automation can use an explicitly configured bearer secret. OIDC access tokens ar
 
 No creation request can select arbitrary container images, runtime classes, storage classes, secret mounts or Git origins. Operators configure those on the controller. Repository is immutable after creation. HTTPS policy may change only while the workspace stays Paused. The API checks stopped processes, and the controller checks and records the applied policy before resume.
 
-A Ready workspace is entered with `kubectl exec` into container `workspace`, `agent-project-controller connect <name>`, or `agent-project-controller exec <name> -- <command>`. The API does not open a tunnel.
+A Ready workspace is entered with `kubectl exec` into container `workspace`, `agent-project-controller connect <name>`, `agent-project-controller exec <name> -- <command>`, or a SAP attach on this same listener. SAP starts `/bin/sh` in that container. It does not accept a client-supplied command and it does not open a worker Service.
 
 ## Custom resource
 

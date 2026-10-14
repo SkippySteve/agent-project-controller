@@ -35,7 +35,7 @@ egress controls and integration of existing shared/provider sandboxes.
 1. An authorized user selects a repository and requests a project environment through the combined project and sandbox console.
 2. The controller grants repository access and provisions narrowly scoped credentials.
 3. It requests a Sandbox, prepares storage and clones the project.
-4. A dashboard or API client receives readiness. A Ready workspace is entered with `kubectl exec` into the `workspace` container, `agent-project-controller connect`, or `agent-project-controller exec <name> -- <command>`.
+4. A dashboard or API client receives readiness. A Ready workspace is entered with `kubectl exec` into the `workspace` container, `agent-project-controller connect`, `agent-project-controller exec <name> -- <command>`, or the [Sandbox Access Protocol](docs/sap.md) attach stream. SAP is how another operator client discovers the sandbox and opens a terminal without a pairing code.
 5. Removal revokes credentials and repository grants, stops the environment, removes storage according to policy and verifies cleanup.
 
 Pause preserves project data. Removal has an explicit retention policy. A failed cleanup must remain visible and retryable; access revoked is not equivalent to data removed.
@@ -118,6 +118,6 @@ Authentik and Keycloak can supply the standard protocol and mapped group claims,
 
 ## Development
 
-Use Go 1.27.2 or later, Git and kubectl for manifest rendering. Run `make test vet build render`. Install the published CLI from the release rather than `go install` of this module. Contribution rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Optional local Kubernetes API and disposable Forgejo qualification are described in [qualification](docs/qualification.md).
+Use Go 1.27.2 or later, Git and kubectl for manifest rendering. Run `make test vet build render`. Install the published CLI from the release rather than `go install` of this module. Contribution rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Optional local Kubernetes API and disposable Forgejo qualification are described in [qualification](docs/qualification.md). `agent-project-controller sap serve` runs the local [Sandbox Access Protocol](docs/sap.md) prototype on loopback.
 
 The container image includes the Go controller, inspecting proxy, clone bootstrap and Git credential helper. No frontend build server or Node runtime is required. Optional OpenRig would run separately within a project environment.

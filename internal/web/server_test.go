@@ -2,14 +2,19 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/forgejo"
+	"git.cluster.aimingupward.com/steve/agent-project-controller/pkg/sap"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -148,4 +153,88 @@ func TestSignedOutPageDoesNotRestartSSOOrExposeAPI(t *testing.T) {
 	if !strings.Contains(string(app), "location.assign('/auth/signed-out')") {
 		t.Fatal("logout reloads the protected dashboard")
 	}
+}
+
+func TestSAPUsesOperatorAuthAndOutlivesAPITimeout(t *testing.T) {
+	password := strings.Repeat("b", 32)
+	memory := &sap.Memory{}
+	if err := memory.Put(sap.Sandbox{Namespace: "proj", Name: "demo", Phase: sap.PhaseReady, Project: "steve/demo", Owner: "steve"}); err != nil {
+		t.Fatal(err)
+	}
+	plane := &sap.Plane{Catalog: memory, Attach: func(context.Context, sap.Sandbox, string) (sap.Session, error) {
+		reader, writer := io.Pipe()
+		return &echoSession{reader: reader, writer: writer}, nil
+	}}
+	defer plane.Close()
+	s := &Server{Client: fake.NewClientBuilder().Build(), Host: host{}, Namespace: "control", Owner: "steve", Password: password, Origin: "https://projects.example.com", AllowBasic: true, SAP: plane, Timeout: 200 * time.Millisecond}
+	handler, err := s.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "/sap/v1/sandboxes", nil))
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous discovery: %d", denied.Code)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := &sap.Client{BaseURL: server.URL, Token: password}
+	list, err := client.List(t.Context())
+	if err != nil || len(list.Items) != 1 || list.Items[0].Name != "demo" || list.Items[0].Project != "steve/demo" {
+		t.Fatalf("list %+v %v", list, err)
+	}
+	foreign, err := http.NewRequest(http.MethodGet, server.URL+"/sap/v1/sandboxes/proj/demo/attach", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign.Header.Set("Authorization", "Bearer "+password)
+	foreign.Header.Set("Origin", "https://evil.example")
+	response, err := http.DefaultClient.Do(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign origin: %d", response.StatusCode)
+	}
+	stream, err := client.Attach(t.Context(), "proj", "demo", sap.ChannelTerminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	time.Sleep(400 * time.Millisecond)
+	if err = stream.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = stream.Read(); err != nil {
+		t.Fatal(err)
+	}
+	if err = stream.Input([]byte("sap")); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := stream.Read()
+	if err != nil || frame.Type != "output" {
+		t.Fatalf("frame %+v %v", frame, err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(frame.Data)
+	if err != nil || string(raw) != "sap" {
+		t.Fatalf("output %q %v", raw, err)
+	}
+}
+
+type echoSession struct {
+	reader *io.PipeReader
+	writer *io.PipeWriter
+	once   sync.Once
+}
+
+func (s *echoSession) Read(p []byte) (int, error)  { return s.reader.Read(p) }
+func (s *echoSession) Write(p []byte) (int, error) { return s.writer.Write(p) }
+func (s *echoSession) Resize(uint16, uint16) error { return nil }
+func (s *echoSession) Close() error {
+	s.once.Do(func() {
+		_ = s.writer.Close()
+		_ = s.reader.Close()
+	})
+	return nil
 }
