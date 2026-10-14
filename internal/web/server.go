@@ -16,6 +16,7 @@ import (
 
 	api "git.cluster.aimingupward.com/steve/agent-project-controller/api/v1alpha1"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/forgejo"
+	"git.cluster.aimingupward.com/steve/agent-project-controller/pkg/sap"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,6 +47,10 @@ type Server struct {
 	AllowBasic                         bool
 	GitHost, GitOrigin                 string
 	SandboxControl                     *SandboxControl
+	SAP                                *sap.Plane
+	// Timeout bounds ordinary API requests. Attach streams are excluded so a
+	// terminal session is not cut off. Zero uses 25 seconds.
+	Timeout time.Duration
 }
 type actorKey struct{}
 
@@ -113,6 +118,9 @@ func (s *Server) Handler() (http.Handler, error) {
 		mux.Handle("/sandboxes/", s.SandboxControl.Handler(s.Origin))
 		mux.HandleFunc("GET /sandboxes", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/sandboxes/", http.StatusSeeOther) })
 	}
+	if s.SAP != nil {
+		s.SAP.Register(mux)
+	}
 	if s.OIDC != nil {
 		mux.HandleFunc("POST /auth/logout", s.OIDC.Logout)
 	}
@@ -175,7 +183,20 @@ func (s *Server) Handler() (http.Handler, error) {
 		} else if basic {
 			subject = "static-operator"
 		}
-		ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), actorKey{}, subject), 25*time.Second)
+		if sap.IsAttach(r.URL.Path) {
+			origin := r.Header.Get("Origin")
+			if origin != "" && origin != s.Origin || (basic || session) && origin != s.Origin {
+				http.Error(w, "same-origin request required", 403)
+				return
+			}
+			mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), actorKey{}, subject)))
+			return
+		}
+		timeout := s.Timeout
+		if timeout <= 0 {
+			timeout = 25 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), actorKey{}, subject), timeout)
 		defer cancel()
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	}), nil

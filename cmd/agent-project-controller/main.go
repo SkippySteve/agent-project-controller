@@ -21,9 +21,11 @@ import (
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/network"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/preflight"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/proxy"
+	sapplane "git.cluster.aimingupward.com/steve/agent-project-controller/internal/sap"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/t3"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/telemetry"
 	"git.cluster.aimingupward.com/steve/agent-project-controller/internal/web"
+	"git.cluster.aimingupward.com/steve/agent-project-controller/pkg/sap"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -138,6 +140,8 @@ func run(ctx context.Context) error {
 			return proxy.Run(ctx)
 		case "preflight":
 			return preflight.Run(ctx)
+		case "sap":
+			return sapplane.CLI(ctx, os.Args[2:])
 		case "connect":
 			if len(os.Args) != 3 {
 				return errors.New("usage: agent-project-controller connect <workspace>")
@@ -222,7 +226,7 @@ func run(ctx context.Context) error {
 	if e = manager.AddReadyzCheck("readyz", healthz.Ping); e != nil {
 		return e
 	}
-	server := &web.Server{Client: direct, Host: host, Namespace: ns, Owner: owner, Password: password, Origin: os.Getenv("PUBLIC_ORIGIN"), GitHost: gitHost, GitOrigin: origin, AllowBasic: os.Getenv("ALLOW_STATIC_LOGIN") == "true"}
+	server := &web.Server{Client: direct, Host: host, Namespace: ns, Owner: owner, Password: password, Origin: os.Getenv("PUBLIC_ORIGIN"), GitHost: gitHost, GitOrigin: origin, AllowBasic: os.Getenv("ALLOW_STATIC_LOGIN") == "true", SAP: &sap.Plane{Catalog: &sapplane.Workspaces{Client: direct, Namespace: ns}, Attach: sapplane.NewPodExec(direct, config, ns).Attach}}
 	if os.Getenv("SANDBOX_CONTROL_URL") != "" {
 		server.SandboxControl = &web.SandboxControl{URL: os.Getenv("SANDBOX_CONTROL_URL"), Origin: os.Getenv("SANDBOX_CONTROL_ORIGIN"), Operator: os.Getenv("SANDBOX_CONTROL_OPERATOR")}
 	} else if os.Getenv("SANDBOX_CONTROL_ORIGIN") != "" || os.Getenv("SANDBOX_CONTROL_OPERATOR") != "" {

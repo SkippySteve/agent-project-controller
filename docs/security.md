@@ -12,6 +12,8 @@ OIDC login requires a verified token and an explicit operator allowlist. Operato
 
 Project API mutations from browser credentials require the configured Origin and JSON content type. The optional existing-sandbox section accepts the backend's bounded POST forms after the same console authentication and Origin check, and retains its signed CSRF cookie and form token. See [console integration](console.md) for explicit delegation and the required trusted backend network boundary. Automation bearer credentials are independently configured and have operator-level authority. They are not OIDC machine tokens or project credentials.
 
+The Sandbox Access Protocol uses that same operator authentication. Attach starts a fixed shell in the workspace container through the Kubernetes API. A browser or static-login attach must come from the configured origin. The request cannot select a command, and the controller does not create a worker Service or ingress for it.
+
 Requested-by identity is copied into immutable audit records. Kubernetes clients can supply that annotation themselves, so it is attribution from the submitted request, not cryptographic proof of the Kubernetes caller. Use Kubernetes API audit logs for direct-client attribution. The controller's own broad RBAC and cluster administrators can delete audit objects; export or back them up if independent audit retention is required.
 
 ## Main protection
